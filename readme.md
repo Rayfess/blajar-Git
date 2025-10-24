@@ -15,6 +15,11 @@
     </li>
     <li>
         <a href="#prerequisites">Prerequisites</a>
+        <ul>
+          <li>
+              <a href="#installation">Installation</a>
+           </li>
+        </ul>
     </li>
     <li><a href="#usage">Usage</a></li>
     <li><a href="#contributing">Contributing</a></li>
@@ -22,21 +27,96 @@
   </ol>
 </details>
 
-<!-- ABOUT THE PROJECT -->
-
 ## About The Project
 
 In this project were introducing the basic and to advanced guide to use github and git commands effectively
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+## Appendix
 
-<!-- PREQUISTIES -->
+### Semantic Commit Messages
+
+Semantic Commits are standardized commit messages that describe what type of change you're making.
+
+Format: `<type>(<scope>): <subject> <des>`
+
+`<scope>` is optional, but recommended for more detailing
+
+#### Semantic Commit Example
+
+```
+feat(feature.html): add feature respect
+^--^ ^----------^  ^-----------------^
+|    |              |
+|    |              +-> Description
+|    |
+|    +--> Scope
+|
++---> Type: (e.g., build, chore, ci, docs, feat, fix, perf, refactor, style, test)
+```
+
+More Examples:
+
+- `feat`: New feature. e.g,`feat: add user registration`
+- `fix`: Bug fix. e.g,`fix: resolve login timeout`
+- `docs`: Documentation. e.g,`docs: update API documentation`
+- `style`: Cosmetic changes to the code that do not affect its behavior or functionality formatting. e.g,`style: fix code indentation`
+- `refactor`: Rewriting existing code to improve effectivly. e.g,`refactor: simplify auth middleware`
+- `test`: e.g,`test: add unit tests for utils`
+- `chore`: General Maintenance tasks. e.g,`chore: update dependencies`
+- `perf`: Performance improvement. e.g,`perf: optimize database queries`
+- `ci` CI/CD. e.g,`ci: add github actions workflow`
+- `build` Build system. e.g,`build: update webpack configuration`
+
+References:
+
+- https://www.conventionalcommits.org/
+- https://seesparkbox.com/foundry/semantic_commit_messages
+- http://karma-runner.github.io/1.0/dev/git-commit-msg.html
+
+### Semantic Versioning
+
+Semantic Versioning is a simple rule system for version numbers: MAJOR.MINOR.PATCH
+
+```
+v1.2.3
+│   │  └── PATCH: Bug fixes, minor changes
+│   └───── MINOR: New features (backward compatible)
+└───────── MAJOR: Breaking changes
+```
+
+#### Example Versioning Production
+
+```
+# Release stable version
+v1.0.0    # Initial release
+v1.0.1    # Hotfix bug critical
+v1.1.0    # Adding New Feature
+v2.0.0    # Breaking changes (require migration)
+```
+
+#### Example Versioning Production
+
+```
+# Pre-release versions, Development
+v1.1.0-alpha.1    # Testing internal
+v1.1.0-beta.1     # Testing with limited user
+v1.1.0-rc.1       # Release candidate
+```
+
+#### Branch Structure
+
+```
+main/production    → v1.2.3 (stable releases)
+develop            → v1.3.0-alpha.1 (development)
+feature/auth-jwt   → from development
+hotfix/critical-bug → from main
+```
 
 ## Prerequisites
 
-- Installing Git
-- Having an Github Account
-- Code Editor
+1. **Git Installed**
+2. **Having an Github Account**
+3. **Code Editor**
 
 ### Installation
 
@@ -47,6 +127,8 @@ In this project were introducing the basic and to advanced guide to use github a
    ```pwsh
    New-Item -Path $PROFILE -Type File -Force
    ```
+
+````
 
 2. On $PROFILE Files Copy This
 
@@ -109,13 +191,6 @@ In this project were introducing the basic and to advanced guide to use github a
        IdentityFile ~/.ssh/id_ed25519_acc2
    ```
 
-#### Verify It and Test Your Connection
-
-```bash
-ssh -T git@github-acc1
-ssh -T git@github-acc2
-```
-
 ## Usage
 
 #### Clone a Repository
@@ -135,8 +210,6 @@ glog
 ```bash
 g -nextcommand
 ```
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Frequently Usage
 
@@ -206,10 +279,6 @@ g merge --abort
 g clone gacc#:owner-repo/repo.git
 ```
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-<!-- CONTRIBUTING -->
-
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
@@ -223,15 +292,9 @@ Don't forget to give the project a star! Thanks again!
 4. Push to the Branch (`git push origin dev/example`)
 5. Open a Pull Request
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-<!-- LICENSE -->
-
 ## License
 
 Distributed under the project_license. See `LICENSE.txt` for more information.
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <a href="https://github.com/Rayfess/blajar-Git/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=Rayfess/blajar-Git" alt="contrib.rocks image" />
@@ -247,3 +310,4 @@ Distributed under the project_license. See `LICENSE.txt` for more information.
 [issues-url]: https://github.com/Rayfess/blajar-Git/issues
 [license-shield]: https://img.shields.io/github/license/Rayfess/blajar-Git.svg?style=for-the-badge
 [license-url]: https://github.com/Rayfess/blajar-Git/blob/master/LICENSE.txt
+````
