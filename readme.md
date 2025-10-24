@@ -128,8 +128,6 @@ hotfix/critical-bug → from main
    New-Item -Path $PROFILE -Type File -Force
    ```
 
-````
-
 2. On $PROFILE Files Copy This
 
    ```pwsh
@@ -196,7 +194,7 @@ hotfix/critical-bug → from main
 #### Clone a Repository
 
 ```bash
-g clone gacc2:Rayfess/blajar-Git.git
+g clone gacc:owner-repo/repo-name.git
 ```
 
 #### `glog` is Shortcut for `git log`
@@ -205,78 +203,90 @@ g clone gacc2:Rayfess/blajar-Git.git
 glog
 ```
 
-#### `g` is Shortcut for `github`
+#### `g` is Shortcut for `git`
 
 ```bash
-g -nextcommand
+g status # git status, shortcut
 ```
 
-## Frequently Usage
+### Frequently Commands
 
-### Checking Branch including remote branch
+Checking Branch including remote branch
 
 ```bash
-g branch -a
+git branch -a
 ```
 
-### Checking Updated from Remote
+Checking Updated from Remote
 
 ```bash
-g fetch --all --prune
+git fetch --all --prune
 ```
 
-### Deleting Branch
+Deleting branch
 
 ```bash
-g branch -D "name-branch"
+git branch -D "name-branch"
 ```
 
-### Push to Remote Branch to Github
+Push to Remote branch to Github
 
 ```bash
-g push -u "name-branch"
+git push -u "name-branch"
 ```
 
-### Amend commit message nor code
+Overwrite push changes to Remote
 
 ```bash
-g commit -amend
+git push origin dev --force-with-lease
 ```
 
-### Creating branch and change it to
+Reset branch to be the same as Targeted Branch
 
 ```bash
-g checkout -b "name-branch"
+git reset --hard "name-branch"
 ```
 
-### Reset branch
+Coming Back to this `Hash` Safely
 
 ```bash
-g reset --hard "name-branch"
+git reset --soft f374fahgs
 ```
 
-### Amend commit message nor code, with history
+Coming Back to this `Hash` Overwrite / Leaving ondoing Workspace
 
 ```bash
-g revert "hash-commit"
+git reset --hard f374fahgs
 ```
 
-### Push Delete to the origin remote
+Create a branch and switch to that branch
 
 ```bash
-g push -u origin --delete "name-branch"
+git checkout -b "name-branch"
 ```
 
-### Abort while merging
+Amend commit message nor code
 
 ```bash
-g merge --abort
+git commit -amend
 ```
 
-### Clonning but with ssh account
+Amend commit message nor code, with history
 
 ```bash
-g clone gacc#:owner-repo/repo.git
+git revert "hash-commit"
+```
+
+Delete Branch and Push to Remote to snyc
+
+```bash
+git push -u origin --delete "name-branch"
+```
+
+Abort while merging
+
+```bash
+git merge --abort
 ```
 
 ## Contributing
@@ -310,4 +320,3 @@ Distributed under the project_license. See `LICENSE.txt` for more information.
 [issues-url]: https://github.com/Rayfess/blajar-Git/issues
 [license-shield]: https://img.shields.io/github/license/Rayfess/blajar-Git.svg?style=for-the-badge
 [license-url]: https://github.com/Rayfess/blajar-Git/blob/master/LICENSE.txt
-````
