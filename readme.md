@@ -152,10 +152,6 @@ hotfix/critical-bug → from main
     Write-Host "Name: $(git config user.name)"
     Write-Host "Email: $(git config user.email)"
     }
-
-    #Alias
-    Set-Alias g git
-    function glog { git log --graph --oneline}
    ```
 
 #### SSH Setup
@@ -189,44 +185,76 @@ hotfix/critical-bug → from main
        IdentityFile ~/.ssh/id_ed25519_acc2
    ```
 
-## Usage
+#### Git Config Setup
 
-#### Clone a Repository
+1. Open your .gitconfig file on your computer
 
-```bash
-g clone gacc:owner-repo/repo-name.git
-```
+   On UNIX (MacOs or Linux)
 
-#### `glog` is Shortcut for `git log`
+   ```bash
+   ~/.gitconfig // On UNIX
+   ```
 
-```bash
-glog
-```
+   On Windows
 
-#### `g` is Shortcut for `git`
+   ```pwsh
+   %USERPROFILE%\.gitconfig // On Windows
+   ```
 
-```bash
-g status # git status, shortcut
-```
+2. Paste this to the config like so
+
+   ```bash
+   [user]
+   	name = example
+   	email = 632486264+username@users.noreply.github.com
+   [credential]
+   	helper = store
+   [init]
+   	defaultBranch = main
+   [alias]
+   alias.st=status
+   alias.ll=log --graph --oneline
+   alias.last=log -1 HEAD --stat
+   alias.cm=commit -m
+   alias.rv=remote -v
+   alias.co=checkout
+   alias.br=branch -a
+   alias.cam=commit --amend -m
+   alias.cob=checkout -b
+   alias.fap=fetch --all --prune
+   alias.brd=branch -D
+   ```
+
+3. Check if its been paste correctly
+
+   ```bash
+   git config --global -l
+   ```
 
 ### Frequently Commands
+
+Clone a Repository
+
+```bash
+git clone gacc:owner-repo/repo-name.git
+```
 
 Checking Branch including remote branch
 
 ```bash
-git branch -a
+git br
 ```
 
 Checking Updated from Remote
 
 ```bash
-git fetch --all --prune
+git fap
 ```
 
 Deleting branch
 
 ```bash
-git branch -D "name-branch"
+git brd "name-branch"
 ```
 
 Push to Remote branch to Github
@@ -262,13 +290,13 @@ git reset --hard f374fahgs
 Create a branch and switch to that branch
 
 ```bash
-git checkout -b "name-branch"
+git cob "name-branch"
 ```
 
 Amend commit message nor code
 
 ```bash
-git commit -amend
+git cam "the message of amend commit"
 ```
 
 Amend commit message nor code, with history
