@@ -317,6 +317,26 @@ Abort while merging
 git merge --abort
 ```
 
+undo git reset --soft
+
+```bash
+git reset --soft ORIG_HEAD
+```
+
+undo git reset and git reset --hard
+
+```bash
+# first method
+git reset --hard ORIG_HEAD
+
+# second method, if the first one failed
+git reflog
+# Seek commit before reset hard, then:
+git reset --hard HEAD@{n}
+# Or
+git reset --hard <commit-hash>
+```
+
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
