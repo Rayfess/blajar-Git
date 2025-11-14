@@ -337,6 +337,16 @@ git reset --hard HEAD@{n}
 git reset --hard <commit-hash>
 ```
 
+Rebase
+
+```bash
+git checkout feat.new-feature
+git rebase dev
+git checkout dev
+git reset --hard feat.new-feature
+git push --force-with-lease origin dev
+```
+
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
