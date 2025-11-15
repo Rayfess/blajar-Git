@@ -347,6 +347,18 @@ git reset --hard feat.new-feature
 git push --force-with-lease origin dev
 ```
 
+Git Stash
+
+```bash
+# --u for include untracked
+# --a for all (include ignored)
+git stash save "name"
+
+git stash list
+
+git stash pop # to pop up the stashed stuff
+```
+
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
