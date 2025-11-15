@@ -347,6 +347,22 @@ git reset --hard feat.new-feature
 git push --force-with-lease origin dev
 ```
 
+Rebase Interactive
+
+```bash
+# rebase interactive for 3 last commit before HEAD
+git rebase -i HEAD~3
+
+# rebase all commit from the start
+git rebase -i --root
+
+# if there was conflict
+git add .
+git rebase --continue
+
+git rebase --abort # or if want to abort
+```
+
 Git Stash
 
 ```bash
