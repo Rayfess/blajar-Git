@@ -120,70 +120,32 @@ hotfix/critical-bug → from main
 
 ### Installation
 
-#### Powershell Setup
-
-1. Create $PROFILE Files For Powershell
-
-   ```pwsh
-   New-Item -Path $PROFILE -Type File -Force
-   ```
-
-2. On $PROFILE Files Copy This
-
-   ```pwsh
-   #GitAcc
-   function gacc1 {
-    git config --global user.name "your-github-username"
-    git config --global user.email "your-github-email"
-    Write-Host "✓ Using Account 1" -ForegroundColor Green
-   }
-
-
-    # Optional if you want 2 account in your workspace
-    # function gacc2 {
-    # git config --global user.name "your-github-username"
-    # git config --global user.email "your-github-email"
-    # Write-Host "✓ Using Account 1" -ForegroundColor Green
-    # }
-
-    # try to test it, shorthand for git config user.name/email
-    function gashow {
-    Write-Host "Git Config:" -ForegroundColor Cyan
-    Write-Host "Name: $(git config user.name)"
-    Write-Host "Email: $(git config user.email)"
-    }
-   ```
-
 #### SSH Setup
 
-1. Make SSH Config File
-
    ```bash
-   mkdir -p ~/.ssh
-   nano ~/.ssh/config
+    ssh-keygen -t ed25519 -C "emailacc@github.com"
+    
+    # Start ssh-agent
+    eval "$(ssh-agent -s)"
+
+    # Add your key to agent
+    ssh-add ~/.ssh/id_ed25519
+
+    # copy your public key and paste it to keys github
+    cat ~/.ssh/id_ed25519.pub
    ```
 
-2. While on Nano Paste This
+  Check if it works out
+  ```bash
+  # Check if its still HTTPS 
+  git remote -v
 
-   ```bash
-   # ~/.ssh/config on Nano
-   # Generate SSH keys for each account
-   ssh-keygen -t ed25519 -C "account1@email.com" -f ~/.ssh/id_ed25519_acc1
+  # Change URL remote to SSH Format (Change 'name' with your Github username)
+  git remote set-url origin git@github.com:name/repo.git
 
-   #optional if want to make 2 account on github
-   # ssh-keygen -t ed25519 -C "account2@email.com" -f ~/.ssh/id_ed25519_acc2
-
-   # Add to SSH config (~/.ssh/config)
-   Host github-acc1
-       HostName github.com
-       User git
-       IdentityFile ~/.ssh/id_ed25519_acc1
-
-   Host github-acc2
-       HostName github.com
-       User git
-       IdentityFile ~/.ssh/id_ed25519_acc2
-   ```
+  # verification if it has changed
+  git remote -v
+  ```
 
 #### Git Config Setup
 
@@ -204,25 +166,25 @@ hotfix/critical-bug → from main
 2. Paste this to the config like so
 
    ```bash
-   [user]
-   	name = example
-   	email = 632486264+username@users.noreply.github.com
-   [credential]
-   	helper = store
-   [init]
-   	defaultBranch = main
-   [alias]
-   alias.st=status
-   alias.ll=log --graph --oneline
-   alias.last=log -1 HEAD --stat
-   alias.cm=commit -m
-   alias.rv=remote -v
-   alias.co=checkout
-   alias.br=branch -a
-   alias.cam=commit --amend -m
-   alias.cob=checkout -b
-   alias.fap=fetch --all --prune
-   alias.brd=branch -D
+    [init]
+        defaultBranch = main
+    [alias]
+        ll = log --graph --oneline
+        st = status
+        cm = commit -m
+        rv = remote -v
+        co = checkout
+        br = branch -a
+        cam = commit --amend -m
+        cob = checkout -b
+        fap = fetch --all --prune
+        brd = branch -D
+    [credential "helperselector"]
+        selected = manager-core
+    [core]
+        autocrlf = input
+        fileMode = false
+        ignorecase = false
    ```
 
 3. Check if its been paste correctly
