@@ -6,7 +6,7 @@ setup linux envirovment using wsl and integrate it with ddev containerization of
 
 - [1. Introduction](#1-introduction)
 - [2. Getting Started](#2-getting-started)
-  - [2.1 Configuration](#22-configuration)
+  - [2.1 Configuration](#21-configuration)
     - [A. Configuration on Windows](#a-configuration-on-windows)
     - [B. Configuration on Linux](#b-configuration-on-linux)
     - [C. Additionals](#c-additionals)
@@ -83,6 +83,11 @@ Migrate Projects from Windows to WSL
 cd ~/projects/your-migrate-project
 rsync -av --progress --exclude='node_modules' --exclude='dist' /mnt/c/Users/nameUser/path/to/yourprojects/ ./
 npm i
+```
+Add SSL Cerficate using mkcert
+
+```bash
+mkcert -install
 ```
 
 ## 3. Installation
