@@ -279,6 +279,64 @@ Abort while merging
 git merge --abort
 ```
 
+undo git reset --soft
+
+```bash
+git reset --soft ORIG_HEAD
+```
+
+undo git reset and git reset --hard
+
+```bash
+# first method
+git reset --hard ORIG_HEAD
+
+# second method, if the first one failed
+git reflog
+# Seek commit before reset hard, then:
+git reset --hard HEAD@{n}
+# Or
+git reset --hard <commit-hash>
+```
+
+Rebase
+
+```bash
+git checkout feat.new-feature
+git rebase dev
+git checkout dev
+git reset --hard feat.new-feature
+git push --force-with-lease origin dev
+```
+
+Rebase Interactive
+
+```bash
+# rebase interactive for 3 last commit before HEAD
+git rebase -i HEAD~3
+
+# rebase all commit from the start
+git rebase -i --root
+
+# if there was conflict
+git add .
+git rebase --continue
+
+git rebase --abort # or if want to abort
+```
+
+Git Stash
+
+```bash
+# --u for include untracked
+# --a for all (include ignored)
+git stash save "name"
+
+git stash list
+
+git stash pop # to pop up the stashed stuff
+```
+
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
