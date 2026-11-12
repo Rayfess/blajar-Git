@@ -13,6 +13,10 @@
 # Fail fast on the first failed step (set -euo pipefail).
 set -euo pipefail
 
+# USER may be unset in minimal/non-login invocation contexts (e.g. wsl -e bash);
+# resolve it once so set -u cannot abort later tasks (FR-09/FR-11).
+USER="${USER:-$(id -un)}"
+
 # ---------------------------------------------------------------- flags ----
 UPGRADE=0
 SKIP_CA=0
