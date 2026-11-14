@@ -16,6 +16,7 @@ reads each commit's own date.
     <li><a href="#prerequisites">Prerequisites</a></li>
     <li><a href="#usage">Usage — Step by Step</a></li>
     <li><a href="#full-example">Full Example — 10 Changes: 3 Today + 7 Tomorrow</a></li>
+    <li><a href="#worked-example-scheduling-a-commit-for-tomorrow">Worked Example: Scheduling a Commit for Tomorrow</a></li>
     <li><a href="#variants">Variants</a></li>
     <li><a href="#verification">Verification</a></li>
     <li><a href="#notes-and-caveats">Notes and Caveats</a></li>
@@ -158,6 +159,49 @@ git push origin main
 > `export` keeps the dates for every commit in the batch in one go;
 > **do not forget `unset`** — otherwise your next normal commits carry the
 > backdated date too.
+
+## Worked Example: Scheduling a Commit for Tomorrow
+
+This guide's own commit was scheduled with the exact flow above. The file was
+committed and pushed on **Nov 13**, with its dates set to **Nov 14, 09:00 WIB**:
+
+```bash
+git status --short                     # inventory: confirm the target file
+git add git-scheduled-commits.md       # stage the target file
+
+GIT_AUTHOR_DATE="2026-11-14T09:00:00+07:00" \
+GIT_COMMITTER_DATE="2026-11-14T09:00:00+07:00" \
+git commit -m "docs: add scheduled commits guide"
+
+git log --format=fuller -1             # verify BEFORE pushing
+git push origin main                   # ship; the square lights up tomorrow
+```
+
+Why each line matters:
+
+| Line | Role |
+|------|------|
+| `git status --short` | Inventory first — make sure nothing else sneaks into the commit |
+| `git add <file>` | Stage only the intended file |
+| `GIT_AUTHOR_DATE=... GIT_COMMITTER_DATE=...` (prefix, no `export`) | The core trick. A prefix applies to **one command only** — the tomorrow-date sticks to this commit alone and cannot leak into later commits (unlike `export`, which needs an `unset` afterwards) |
+| `+07:00` timezone offset | A bare date can be interpreted in another timezone and shift the commit to a different day |
+| `git log --format=fuller -1` | Read **AuthorDate** (what the graph reads) and CommitDate *before* pushing; fix with `--amend` if wrong |
+| `git push origin main` | GitHub counts the commit by AuthorDate regardless of when it was pushed |
+
+Verified output from the real run:
+
+```
+commit 15b0cd71c2fc9dd4a1266f6ce2a8fcd9bdd9791e
+Author:     Rayfess <153087368+Rayfess@users.noreply.github.com>
+AuthorDate: Sat Nov 14 09:00:00 2026 +0700
+Commit:     Rayfess <153087368+Rayfess@users.noreply.github.com>
+CommitDate: Sat Nov 14 09:00:00 2026 +0700
+
+    docs: add scheduled commits guide
+```
+
+Behavior: pushed on Nov 13, the square stays dark until **Nov 14 09:00**, then
+lights up on its own — nothing else to run.
 
 ## Variants
 
