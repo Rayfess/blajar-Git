@@ -14,6 +14,9 @@
       <a href="#about-the-project">About The Project</a>
     </li>
     <li>
+      <a href="#wsl2--ddev-setup-automation">WSL2 + DDEV Setup Automation</a>
+    </li>
+    <li>
         <a href="#prerequisites">Prerequisites</a>
         <ul>
           <li>
@@ -30,6 +33,60 @@
 ## About The Project
 
 In this project were introducing the basic and to advanced guide to use github and git commands effectively
+
+## WSL2 + DDEV Setup Automation
+
+This repository ships a one-command installer for a full Linux development
+environment on WSL2 (Debian-only) with Docker CE, DDEV, Portainer, mkcert HTTPS
+for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
+[wslddev.md](wslddev.md). Requirements and acceptance criteria live in
+[wsl-ddev-setup-prd.md](wsl-ddev-setup-prd.md).
+
+### Quick Start
+
+1. Open **PowerShell as Administrator** (Win+X → Terminal (Admin))
+2. Run the installer:
+
+   ```pwsh
+   cd D:\path\to\blajar-Git
+   powershell -ExecutionPolicy Bypass -File wsl-setup.ps1
+   ```
+
+3. The script routes itself (decision tree):
+   - WSL feature missing → installs it → **restart Windows** → run again
+   - Feature present, no distro → installs **Debian** → **first launch**
+     (create your UNIX user) → run again
+   - Debian installed → writes `.wslconfig` → chains Linux provisioning
+     automatically
+
+4. Enter the **sudo password once**; provisioning runs unattended
+   (13 tasks, 5-second pause each) and ends with a PASS/FAIL status report.
+
+### Optional Flags
+
+| Flag | Effect |
+|------|--------|
+| `-Upgrade` | full `apt upgrade` during provisioning |
+| `-SkipCaImport` | skip importing the mkcert CA into Windows |
+| `-WithZshCompletions` | install the opt-in zsh-completions plugin |
+| `-Pause <seconds>` | change the per-task pause (default 5) |
+
+### Notes
+
+- **Debian-only** and **single-distro**: extra or non-Debian distros abort with
+  fix-it instructions (`wsl --unregister <name>`).
+- Manual steps by design: the Windows restart, the first-launch UNIX user
+  creation, and uninstalling Docker Desktop if present (warned by the script).
+- Portainer is bound to loopback only: `https://127.0.0.1:9443`.
+- Every task prints what it changes; nothing is installed twice (reruns are safe).
+- After PASS: `cd ~/projects/<project> && ddev start`, Portainer at
+  `https://127.0.0.1:9443`, and new WSL sessions open in zsh.
+- If a task FAILs, rerun the script (idempotent) and paste the output for analysis.
+
+### Test Without Installing
+
+The provisioning logic was verified in a stubbed sandbox (Debian fresh/rerun,
+flags, non-Debian abort) — see [wsl-ddev-sim-report.md](wsl-ddev-sim-report.md).
 
 ## Appendix
 
