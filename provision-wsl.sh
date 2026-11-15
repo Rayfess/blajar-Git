@@ -2,8 +2,8 @@
 # provision-wsl.sh - Linux side of the WSL2 + DDEV setup automation.
 # Implements FR-05..FR-18 of wsl-ddev-setup-prd.md (repository root).
 #
-# Supported distros (PRD): Debian >= 12, Fedora >= 42. The script detects the
-# running distro from /etc/os-release and adapts (apt on Debian, dnf on Fedora).
+# Supported distro (PRD): Debian >= 12 ONLY. The script verifies the running
+# distro from /etc/os-release and aborts on anything else.
 #
 # Run inside WSL (or chained by wsl-setup.ps1):
 #     bash provision-wsl.sh [--upgrade] [--skip-ca-import]
@@ -54,7 +54,7 @@ MKCERT_VERSION="v1.4.4"   # pinned upstream release; verify before bumping:
 ZSH_AUTOSUGGESTIONS_REF="0.7.1"        # github.com/zsh-users/zsh-autosuggestions
 ZSH_SYNTAX_HIGHLIGHTING_REF="0.8.0"    # github.com/zsh-users/zsh-syntax-highlighting
 # Source references (official docs, kept for traceability - PRD "no version rot"):
-#   Docker CE install : https://docs.docker.com/engine/install/debian/ (+ /ubuntu/, /fedora/)
+#   Docker CE install : https://docs.docker.com/engine/install/debian/
 #   DDEV              : https://docs.ddev.com/ (install script: ddev.com/install.sh)
 #   bun               : https://bun.sh/docs/installation (its installer needs unzip)
 #   mkcert            : https://github.com/FiloSottile/mkcert
@@ -89,43 +89,12 @@ keep_sudo_alive() { while true; do sudo -n true 2>/dev/null || return; sleep 55;
 keep_sudo_alive &
 SUDO_KEEPALIVE_PID=$!
 
-# ---------------------- package-manager abstraction (PRD, declared) --------
-# Set after FR-05 detects ID_LC: apt on Debian, dnf on Fedora.
-pm_update() {
-    if [[ "$ID_LC" == "fedora" ]]; then
-        sudo dnf -q makecache
-    else
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-    fi
-}
-pm_upgrade() {
-    if [[ "$ID_LC" == "fedora" ]]; then
-        sudo dnf -q -y upgrade
-    else
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
-    fi
-}
-pm_installed() {
-    if [[ "$ID_LC" == "fedora" ]]; then
-        rpm -q "$1" >/dev/null 2>&1
-    else
-        dpkg -s "$1" >/dev/null 2>&1
-    fi
-}
-pm_install() {
-    if [[ "$ID_LC" == "fedora" ]]; then
-        sudo dnf -q -y install "$@"
-    else
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
-    fi
-}
-pm_remove() {
-    if [[ "$ID_LC" == "fedora" ]]; then
-        sudo dnf -q -y remove "$@"
-    else
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq "$@"
-    fi
-}
+# ---------------------- package manager (Debian-only: apt) ------------------
+pm_update()    { sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq; }
+pm_upgrade()   { sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq; }
+pm_installed() { dpkg -s "$1" >/dev/null 2>&1; }
+pm_install()   { sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"; }
+pm_remove()    { sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq "$@"; }
 
 # ============================================================ FR-05 ========
 task_start "FR-05" "Inventory & preflight" \
@@ -146,11 +115,8 @@ case "$ID_LC" in
             die "VERSION_CODENAME missing - required on Debian for the Docker apt source"
         fi
         ;;
-    fedora)
-        [[ "${VERSION_ID%%.*}" -ge 42 ]] || die "Fedora >= 42 required, found $VERSION_ID"
-        ;;
     *)
-        die "Unsupported distro: $ID (supported: Debian >= 12, Fedora >= 42)"
+        die "Unsupported distro: $ID (this automation is Debian-only, >= 12)"
         ;;
 esac
 ok "Distro: $PRETTY_NAME"
@@ -244,7 +210,7 @@ task_end
 
 # ============================================================ FR-07 ========
 task_start "FR-07" "Package index" \
-    "Index refresh every run (apt-get update / dnf makecache); full upgrade only with --upgrade."
+    "Index refresh every run (apt-get update); full upgrade only with --upgrade."
 pm_update
 ok "package index refreshed ($ID_LC)"
 if [[ "$UPGRADE" == "1" ]]; then
@@ -258,12 +224,7 @@ task_end
 # ============================================================ FR-08 ========
 task_start "FR-08" "Development tools" \
     "Install only what is missing: curl, git, zsh, C toolchain, Node.js LTS + npm (NodeSource), bun (official installer). Names mapped per distro (PRD)."
-BASE_PKGS=(curl git zsh ca-certificates unzip)   # unzip: required by bun's official installer
-if [[ "$ID_LC" == "fedora" ]]; then
-    BASE_PKGS+=(gcc gcc-c++ make)   # build-essential equivalent (PRD mapping)
-else
-    BASE_PKGS+=(build-essential)
-fi
+BASE_PKGS=(curl git zsh ca-certificates unzip build-essential)   # unzip: required by bun's installer
 MISSING_PKGS=()
 for p in "${BASE_PKGS[@]}"; do
     if ! pm_installed "$p"; then MISSING_PKGS+=("$p"); fi
@@ -278,11 +239,7 @@ if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
     skip "node/npm already present ($(node --version))"
 else
     NODE_SETUP="$(mktemp)"
-    if [[ "$ID_LC" == "fedora" ]]; then
-        curl -fsSL "https://rpm.nodesource.com/setup_${NODE_MAJOR}.x" -o "$NODE_SETUP"
-    else
-        curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" -o "$NODE_SETUP"
-    fi
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" -o "$NODE_SETUP"
     sudo -E bash "$NODE_SETUP"   # download as user, execute under sudo (NodeSource docs flow)
     rm -f "$NODE_SETUP"
     pm_install nodejs
@@ -364,55 +321,33 @@ task_end
 
 # ============================================================ FR-10 ========
 task_start "FR-10" "Cleanup conflicting providers" \
-    "Debian: Docker docs conflicting packages. Fedora: only the podman-docker shim (podman itself is left untouched, PRD)."
-if [[ "$ID_LC" == "fedora" ]]; then
-    if pm_installed podman-docker; then
-        pm_remove podman-docker
-        chg "removed podman-docker shim (it shadows /usr/bin/docker)"
-    else
-        skip "podman-docker shim not installed"
-    fi
-    if rpm -q podman >/dev/null 2>&1; then
-        warn "podman is present (Fedora default) - left untouched; Docker CE coexists with it"
-    fi
+    "Official Docker docs: remove conflicting packages before Docker CE (skip if not installed)."
+CONFLICTS=(docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc)
+TO_REMOVE=()
+for p in "${CONFLICTS[@]}"; do
+    if pm_installed "$p"; then TO_REMOVE+=("$p"); fi
+done
+if [[ ${#TO_REMOVE[@]} -gt 0 ]]; then
+    pm_remove "${TO_REMOVE[@]}"
+    chg "removed: ${TO_REMOVE[*]}"
 else
-    CONFLICTS=(docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc)
-    TO_REMOVE=()
-    for p in "${CONFLICTS[@]}"; do
-        if pm_installed "$p"; then TO_REMOVE+=("$p"); fi
-    done
-    if [[ ${#TO_REMOVE[@]} -gt 0 ]]; then
-        pm_remove "${TO_REMOVE[@]}"
-        chg "removed: ${TO_REMOVE[*]}"
-    else
-        skip "no conflicting packages installed"
-    fi
+    skip "no conflicting packages installed"
 fi
 task_end
 
 # ============================================================ FR-11 ========
 task_start "FR-11" "Docker CE" \
-    "Official distro-matched repository (Debian: deb822 apt source; Fedora: docker-ce.repo via dnf config-manager), docker group, enable + start service."
+    "Official deb822 apt repository keyed by VERSION_CODENAME, docker group, enable + start service."
 if command -v docker >/dev/null 2>&1; then
     ok "docker already installed: $(docker --version)"
 else
-    if [[ "$ID_LC" == "fedora" ]]; then
-        REPO_URL="https://download.docker.com/linux/fedora/docker-ce.repo"
-        pm_install dnf-plugins-core
-        if ! sudo dnf config-manager addrepo --from-repofile="$REPO_URL" 2>/dev/null; then
-            sudo dnf config-manager --add-repo="$REPO_URL"   # dnf4 fallback
-        fi
-        chg "added Docker repo (dnf): $REPO_URL"
-        pm_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-        chg "installed Docker CE + buildx + compose plugin (dnf)"
-    else
-        REPO="https://download.docker.com/linux/$ID_LC"
-        sudo install -m 0755 -d /etc/apt/keyrings
-        GPG_TMP="$(mktemp)"
-        curl -fsSL "$REPO/gpg" -o "$GPG_TMP"   # download as user (least privilege)
-        sudo install -m 0644 "$GPG_TMP" /etc/apt/keyrings/docker.asc
-        rm -f "$GPG_TMP"
-        sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+    REPO="https://download.docker.com/linux/$ID_LC"
+    sudo install -m 0755 -d /etc/apt/keyrings
+    GPG_TMP="$(mktemp)"
+    curl -fsSL "$REPO/gpg" -o "$GPG_TMP"   # download as user (least privilege)
+    sudo install -m 0644 "$GPG_TMP" /etc/apt/keyrings/docker.asc
+    rm -f "$GPG_TMP"
+    sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
 Types: deb
 URIs: $REPO
 Suites: $VERSION_CODENAME
@@ -420,11 +355,10 @@ Components: stable
 Architectures: $(dpkg --print-architecture)
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
-        chg "added apt source /etc/apt/sources.list.d/docker.sources ($ID_LC / $VERSION_CODENAME)"
-        pm_update
-        pm_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-        chg "installed Docker CE + buildx + compose plugin (apt)"
-    fi
+    chg "added apt source /etc/apt/sources.list.d/docker.sources ($ID_LC / $VERSION_CODENAME)"
+    pm_update
+    pm_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    chg "installed Docker CE + buildx + compose plugin (apt)"
 fi
 if id -nG "$USER" | grep -qw docker; then
     ok "user already in docker group"
@@ -481,7 +415,6 @@ task_end
 task_start "FR-14" "mkcert" \
     "Local CA for *.ddev.site HTTPS; distro NSS tools (libnss3-tools / nss-tools); mkcert -install."
 NSS_PKG="libnss3-tools"
-if [[ "$ID_LC" == "fedora" ]]; then NSS_PKG="nss-tools"; fi
 if ! pm_installed "$NSS_PKG"; then
     pm_install "$NSS_PKG"
     chg "installed $NSS_PKG"

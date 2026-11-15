@@ -1,7 +1,7 @@
 <#
 wsl-setup.ps1 - Windows side of the WSL2 + DDEV setup automation.
 Implements FR-01..FR-04 of wsl-ddev-setup-prd.md (repository root).
-Supported distros (PRD): Debian >= 12, Fedora >= 42; exactly ONE WSL
+Supported distro (PRD): Debian >= 12 ONLY; exactly ONE WSL
 distro may be installed (single-distro rule, FR-02 Branch 1).
 
 Run elevated:
@@ -143,6 +143,12 @@ if ($distroList.Count -gt 0) {
     }
     $distro = Get-DefaultDistro
     if (-not $distro) { $distro = $distroList[0] }
+    if ($distro -notmatch 'Debian') {
+        # Debian-only (PRD): abort instead of provisioning the wrong distro.
+        Write-FailLine "This automation is Debian-only. Installed distro: '$distro'."
+        Write-Info "Switch:  wsl --unregister '$distro'   then   wsl --install -d Debian   and rerun."
+        exit 1
+    }
     Write-Step ("FR-02 Branch 1: distro '{0}' installed" -f $distro)
 
     # FR-03 - write .wslconfig (doc-exact, wslddev.md lines 36-48)
@@ -200,50 +206,18 @@ sparseVhd=true
     exit $LASTEXITCODE
 }
 elseif ($featureEnabled) {
-    # ---- Branch 3: feature present, no distro -> pick + install ----------
+    # ---- Branch 3: feature present, no distro -> install Debian directly --
     Write-Step "FR-02 Branch 3: WSL feature enabled, no distro installed"
-
-    $online = @()
-    try {
-        $raw = (& wsl.exe --list --online 2>$null)
-        if ($LASTEXITCODE -eq 0) { $online = Clean-WslOutput $raw }
-    } catch { }
-
-    $names = @()
-    $sepSeen = $false
-    foreach ($line in $online) {
-        if (-not $sepSeen) {
-            if ($line -match '^-{3,}') { $sepSeen = $true }
-            continue
-        }
-        $tok = ($line.Trim() -split '\s+')[0]
-        if ($tok -and $tok -ne 'NAME') { $names += $tok }
-    }
-    # Supported distros only (PRD): Debian and Fedora
-    $names = @($names | Where-Object { $_ -match '^(Debian|Fedora)' })
-    if ($names.Count -eq 0) {
-        Write-FailLine "No supported distros (Debian/Fedora) found in 'wsl --list --online'. Check connectivity, update Windows/WSL, or install one manually, then rerun."
-        exit 1
-    }
-    for ($i = 0; $i -lt $names.Count; $i++) {
-        Write-Host ("  [{0}] {1}" -f ($i + 1), $names[$i])
-    }
-    $pick = Read-Host "Pick a distro by number (1-$($names.Count))"
-    $idx = 0
-    if (-not [int]::TryParse($pick, [ref]$idx) -or $idx -lt 1 -or $idx -gt $names.Count) {
-        Write-FailLine "Invalid selection: '$pick'"
-        exit 1
-    }
-    $selection = $names[$idx - 1]
-    Write-Info "Installing: wsl --install -d $selection --no-launch"
-    & wsl.exe --install -d $selection --no-launch 2>$null
+    Write-Info "Debian-only automation (PRD): installing Debian, no distro picker."
+    Write-Info "Installing: wsl --install -d Debian --no-launch"
+    & wsl.exe --install -d Debian --no-launch 2>$null
     if ($LASTEXITCODE -ne 0) {
-        Write-WarnLine "--no-launch not supported here; running plain wsl --install -d $selection"
-        & wsl.exe --install -d $selection
+        Write-WarnLine "--no-launch not supported here; running plain wsl --install -d Debian"
+        & wsl.exe --install -d Debian
     }
     Write-Host ""
     Write-Host "[FIRST LAUNCH REQUIRED]" -ForegroundColor Yellow
-    Write-Host "  1. Open the distro first launch:  wsl -d $selection   (or Start menu -> $selection)"
+    Write-Host "  1. Open the distro first launch:  wsl -d Debian   (or Start menu -> Debian)"
     Write-Host "  2. Create your UNIX username and password when prompted."
     Write-Host "  3. Run this script again - it will write .wslconfig and chain into provisioning."
     exit 0
