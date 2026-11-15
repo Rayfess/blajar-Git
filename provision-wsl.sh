@@ -33,6 +33,34 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+# --------------------------------------------- root guard (best practice) --
+# Everything here must run as the normal WSL user: tool installs (bun, zsh
+# plugins) must land in YOUR home, and 'usermod -aG docker' must target YOUR
+# user. The script elevates via sudo only where required.
+if [[ $EUID -eq 0 ]]; then
+    echo "[ABORT] Running as root is not supported. Run as your normal WSL user." >&2
+    echo "        (Installs would land in /root and 'usermod' would target the wrong user.)" >&2
+    exit 1
+fi
+
+# --------------------------------------------- configuration & references --
+NODE_MAJOR=22   # Node.js LTS major; bump deliberately (NodeSource docs:
+                # https://github.com/nodesource/distributions)
+MKCERT_VERSION="v1.4.4"   # pinned upstream release; verify before bumping:
+                          # https://github.com/FiloSottile/mkcert/releases
+# zsh plugins are sourced into every interactive shell - pinning the upstream
+# release tag is a supply-chain control. Clone falls back to latest if the
+# tag is missing upstream.
+ZSH_AUTOSUGGESTIONS_REF="0.7.1"        # github.com/zsh-users/zsh-autosuggestions
+ZSH_SYNTAX_HIGHLIGHTING_REF="0.8.0"    # github.com/zsh-users/zsh-syntax-highlighting
+# Source references (official docs, kept for traceability - PRD "no version rot"):
+#   Docker CE install : https://docs.docker.com/engine/install/debian/ (+ /ubuntu/, /fedora/)
+#   DDEV              : https://docs.ddev.com/ (install script: ddev.com/install.sh)
+#   bun               : https://bun.sh/docs/installation (its installer needs unzip)
+#   mkcert            : https://github.com/FiloSottile/mkcert
+#   Portainer CE      : https://docs.portainer.io/start/install-ce/server/docker
+#   zsh plugins       : https://github.com/zsh-users/zsh-autosuggestions + zsh-syntax-highlighting
+
 # ------------------------------------------------- presentation (FR-17) ----
 TOTAL=13
 CURRENT=0
@@ -50,6 +78,7 @@ ok()   { echo "  [OK]   $*"; }
 chg()  { echo "  [CHG]  $*"; }
 skip() { echo "  [SKIP] $*"; }
 warn() { echo "  [WARN] $*"; }
+die()  { echo "  [ABORT] $*" >&2; exit 1; }
 
 # --------------------------------- sudo keepalive (one prompt, kept alive) -
 SUDO_KEEPALIVE_PID=""
@@ -103,29 +132,25 @@ task_start "FR-05" "Inventory & preflight" \
     "Detect distro/systemd; report what is already installed. Nothing is reinstalled."
 
 if [[ ! -r /etc/os-release ]]; then
-    echo "[ABORT] /etc/os-release not readable - unsupported distro" >&2
-    exit 1
+    die "/etc/os-release not readable - unsupported distro"
 fi
 . /etc/os-release
 ID_LC="${ID,,}"
 if [[ -z "${VERSION_ID:-}" ]]; then
-    echo "[ABORT] VERSION_ID missing in /etc/os-release (testing/sid?) - unsupported" >&2
-    exit 1
+    die "VERSION_ID missing in /etc/os-release (testing/sid?) - unsupported"
 fi
 case "$ID_LC" in
     debian)
-        [[ "${VERSION_ID%%.*}" -ge 12 ]] || { echo "[ABORT] Debian >= 12 required, found $VERSION_ID" >&2; exit 1; }
+        [[ "${VERSION_ID%%.*}" -ge 12 ]] || die "Debian >= 12 required, found $VERSION_ID"
         if [[ -z "${VERSION_CODENAME:-}" ]]; then
-            echo "[ABORT] VERSION_CODENAME missing - required on Debian for the Docker apt source" >&2
-            exit 1
+            die "VERSION_CODENAME missing - required on Debian for the Docker apt source"
         fi
         ;;
     fedora)
-        [[ "${VERSION_ID%%.*}" -ge 42 ]] || { echo "[ABORT] Fedora >= 42 required, found $VERSION_ID" >&2; exit 1; }
+        [[ "${VERSION_ID%%.*}" -ge 42 ]] || die "Fedora >= 42 required, found $VERSION_ID"
         ;;
     *)
-        echo "[ABORT] Unsupported distro: $ID (supported: Debian >= 12, Fedora >= 42)" >&2
-        exit 1
+        die "Unsupported distro: $ID (supported: Debian >= 12, Fedora >= 42)"
         ;;
 esac
 ok "Distro: $PRETTY_NAME"
@@ -152,12 +177,18 @@ inv ddev   ddev -v
 inv git    git --version
 inv node   node --version
 inv npm    npm --version
-inv bun    bun --version
 inv zsh    zsh --version
 inv curl   curl --version
+# bun lives outside PATH (~/.bun/bin) until a session adds it - check the file too
+if c="$(command -v bun 2>/dev/null)" || [[ -x "$HOME/.bun/bin/bun" ]]; then
+    BUN_BIN="${c:-$HOME/.bun/bin/bun}"
+    ok "bun: $BUN_BIN [$("$BUN_BIN" --version)]"
+else
+    skip "bun: not installed"
+fi
 if command -v mkcert >/dev/null 2>&1; then ok "mkcert: $(command -v mkcert)"; else skip "mkcert: not installed"; fi
 if command -v docker >/dev/null 2>&1; then
-    PT=$(sudo docker ps -a --filter name=portainer --format '{{.State}}' 2>/dev/null || true)
+    PT=$(sudo docker ps -a --format '{{.Names}} {{.State}}' 2>/dev/null | awk '$1 == "portainer" { print $2 }')
     if [[ -n "$PT" ]]; then ok "portainer container: $PT"; else skip "portainer container: not present"; fi
 fi
 task_end
@@ -227,7 +258,7 @@ task_end
 # ============================================================ FR-08 ========
 task_start "FR-08" "Development tools" \
     "Install only what is missing: curl, git, zsh, C toolchain, Node.js LTS + npm (NodeSource), bun (official installer). Names mapped per distro (PRD)."
-BASE_PKGS=(curl git zsh ca-certificates)
+BASE_PKGS=(curl git zsh ca-certificates unzip)   # unzip: required by bun's official installer
 if [[ "$ID_LC" == "fedora" ]]; then
     BASE_PKGS+=(gcc gcc-c++ make)   # build-essential equivalent (PRD mapping)
 else
@@ -246,18 +277,24 @@ fi
 if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
     skip "node/npm already present ($(node --version))"
 else
+    NODE_SETUP="$(mktemp)"
     if [[ "$ID_LC" == "fedora" ]]; then
-        curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
+        curl -fsSL "https://rpm.nodesource.com/setup_${NODE_MAJOR}.x" -o "$NODE_SETUP"
     else
-        curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+        curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" -o "$NODE_SETUP"
     fi
+    sudo -E bash "$NODE_SETUP"   # download as user, execute under sudo (NodeSource docs flow)
+    rm -f "$NODE_SETUP"
     pm_install nodejs
     chg "Node.js LTS installed: $(node --version) (npm $(npm --version))"
 fi
 if [[ -x "$HOME/.bun/bin/bun" ]] || command -v bun >/dev/null 2>&1; then
     skip "bun already present"
 else
-    curl -fsSL https://bun.sh/install | bash
+    BUN_INSTALLER="$(mktemp)"
+    curl -fsSL https://bun.sh/install -o "$BUN_INSTALLER"   # inspectable before running
+    bash "$BUN_INSTALLER"
+    rm -f "$BUN_INSTALLER"
     chg "bun installed: $("$HOME/.bun/bin/bun" --version)"
 fi
 task_end
@@ -267,19 +304,24 @@ task_start "FR-09" "Shell setup (zsh)" \
     "No framework by policy. Clone autosuggestions + syntax-highlighting, managed block in ~/.zshrc (syntax-highlighting sourced last per its docs)."
 ZPLUG="$HOME/.zsh/plugins"
 mkdir -p "$ZPLUG"
-clone_plugin() { # url, dir
-    local url="$1" dir="$2"
+clone_plugin() { # url, ref ("" = latest), dir
+    local url="$1" ref="${2:-}" dir="$3"
     if [[ -d "$dir/.git" ]]; then
         skip "plugin $(basename "$dir") already cloned"
     else
-        git clone --depth=1 -q "$url" "$dir"
-        chg "cloned $(basename "$dir")"
+        if [[ -n "$ref" ]]; then
+            git clone --depth=1 -q --branch "$ref" "$url" "$dir" 2>/dev/null \
+                || git clone --depth=1 -q "$url" "$dir"   # fallback: latest if tag missing
+        else
+            git clone --depth=1 -q "$url" "$dir"
+        fi
+        chg "cloned $(basename "$dir")${ref:+ (ref: $ref)}"
     fi
 }
-clone_plugin https://github.com/zsh-users/zsh-autosuggestions.git "$ZPLUG/zsh-autosuggestions"
-clone_plugin https://github.com/zsh-users/zsh-syntax-highlighting.git "$ZPLUG/zsh-syntax-highlighting"
+clone_plugin https://github.com/zsh-users/zsh-autosuggestions.git "$ZSH_AUTOSUGGESTIONS_REF" "$ZPLUG/zsh-autosuggestions"
+clone_plugin https://github.com/zsh-users/zsh-syntax-highlighting.git "$ZSH_SYNTAX_HIGHLIGHTING_REF" "$ZPLUG/zsh-syntax-highlighting"
 if [[ "$WITH_COMPLETIONS" == "1" ]]; then
-    clone_plugin https://github.com/zsh-users/zsh-completions.git "$ZPLUG/zsh-completions"
+    clone_plugin https://github.com/zsh-users/zsh-completions.git "" "$ZPLUG/zsh-completions"
 fi
 
 ZRC="$HOME/.zshrc"
@@ -297,6 +339,7 @@ else
         if [[ "$WITH_COMPLETIONS" == "1" ]]; then
             echo 'fpath=(~/.zsh/plugins/zsh-completions/src $fpath)'
         fi
+        echo '# compinit -C: cached, skips the security audit (compaudit) - deliberate speed tradeoff'
         echo 'compinit -C'
         echo '[ -f ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ] && source ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh'
         echo '[ -f ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ] && source ~/.zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh'
@@ -365,8 +408,10 @@ else
     else
         REPO="https://download.docker.com/linux/$ID_LC"
         sudo install -m 0755 -d /etc/apt/keyrings
-        sudo curl -fsSL "$REPO/gpg" -o /etc/apt/keyrings/docker.asc
-        sudo chmod a+r /etc/apt/keyrings/docker.asc
+        GPG_TMP="$(mktemp)"
+        curl -fsSL "$REPO/gpg" -o "$GPG_TMP"   # download as user (least privilege)
+        sudo install -m 0644 "$GPG_TMP" /etc/apt/keyrings/docker.asc
+        rm -f "$GPG_TMP"
         sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
 Types: deb
 URIs: $REPO
@@ -401,6 +446,14 @@ run_docker() {
         sg docker -c "$(printf '%q ' docker "$@")"
     fi
 }
+# Exact-name matching: docker's 'name=' filter is a SUBSTRING match, which can
+# hit unrelated containers (e.g. 'my-portainer-test'). Match names precisely.
+portainer_exists() {
+    run_docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx portainer
+}
+portainer_state() {
+    run_docker ps -a --format '{{.Names}} {{.State}}' 2>/dev/null | awk '$1 == "portainer" { print $2 }'
+}
 if sudo docker image inspect hello-world >/dev/null 2>&1; then
     skip "hello-world image already present (verified previously)"
 else
@@ -416,7 +469,10 @@ task_start "FR-13" "DDEV" \
 if command -v ddev >/dev/null 2>&1; then
     ok "ddev already installed: $(ddev -v)"
 else
-    curl -fsSL https://ddev.com/install.sh | bash
+    DDEV_INSTALLER="$(mktemp)"
+    curl -fsSL https://ddev.com/install.sh -o "$DDEV_INSTALLER"   # inspectable before running
+    bash "$DDEV_INSTALLER"
+    rm -f "$DDEV_INSTALLER"
     chg "ddev installed: $(ddev -v)"
 fi
 task_end
@@ -436,14 +492,14 @@ else
     case "$(uname -m)" in
         x86_64)  MKCERT_ARCH="amd64" ;;
         aarch64) MKCERT_ARCH="arm64" ;;
-        *) echo "[ABORT] Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+        *) die "Unsupported architecture: $(uname -m)" ;;
     esac
-    MKCERT_TAG=$(curl -fsSL https://api.github.com/repos/FiloSottile/mkcert/releases/latest \
-        | grep -m1 '"tag_name"' | cut -d'"' -f4)
-    sudo curl -fsSL "https://github.com/FiloSottile/mkcert/releases/download/${MKCERT_TAG}/mkcert-${MKCERT_TAG}-linux-${MKCERT_ARCH}" \
-        -o /usr/local/bin/mkcert
-    sudo chmod +x /usr/local/bin/mkcert
-    chg "mkcert $MKCERT_TAG installed to /usr/local/bin/mkcert (arch: $MKCERT_ARCH)"
+    MKCERT_URL="https://github.com/FiloSottile/mkcert/releases/download/${MKCERT_VERSION}/mkcert-${MKCERT_VERSION}-linux-${MKCERT_ARCH}"
+    MKCERT_BIN="$(mktemp)"
+    curl -fsSL "$MKCERT_URL" -o "$MKCERT_BIN"   # pinned version, downloaded as user
+    sudo install -m 0755 "$MKCERT_BIN" /usr/local/bin/mkcert
+    rm -f "$MKCERT_BIN"
+    chg "mkcert $MKCERT_VERSION installed to /usr/local/bin/mkcert (arch: $MKCERT_ARCH)"
 fi
 if [[ ! -f "$(mkcert -CAROOT)/rootCA.pem" ]]; then
     mkcert -install
@@ -464,14 +520,20 @@ else
         warn "certutil.exe not reachable (interop disabled?) - import manually: $(mkcert -CAROOT)/rootCA.pem"
     else
         WIN_USER=$(/mnt/c/Windows/System32/cmd.exe /c "echo %USERNAME%" 2>/dev/null | tr -d '\r\n')
-        DEST="/mnt/c/Users/${WIN_USER}/AppData/Local/Temp/mkcert-rootCA.pem"
-        cp "$(mkcert -CAROOT)/rootCA.pem" "$DEST"
-        if "$CERTUTIL" -user -store Root 2>/dev/null | grep -qi 'mkcert'; then
-            skip "mkcert root CA already trusted in Windows current-user store"
-        elif "$CERTUTIL" -user -addstore Root "$(wslpath -w "$DEST")" >/dev/null 2>&1; then
-            chg "mkcert root CA imported to Windows (current-user Trusted Root)"
+        if [[ -z "$WIN_USER" ]]; then
+            warn "could not resolve Windows username - import manually from $(mkcert -CAROOT)/rootCA.pem"
         else
-            warn "certutil import failed - import manually from $(mkcert -CAROOT)/rootCA.pem"
+            DEST="/mnt/c/Users/${WIN_USER}/AppData/Local/Temp/mkcert-rootCA.pem"
+            cp "$(mkcert -CAROOT)/rootCA.pem" "$DEST"
+            if "$CERTUTIL" -user -store Root 2>/dev/null | grep -qi 'mkcert'; then
+                rm -f "$DEST"
+                skip "mkcert root CA already trusted in Windows current-user store"
+            elif "$CERTUTIL" -user -addstore Root "$(wslpath -w "$DEST")" >/dev/null 2>&1; then
+                rm -f "$DEST"
+                chg "mkcert root CA imported to Windows (current-user Trusted Root)"
+            else
+                warn "certutil import failed - staged copy kept for manual import: $DEST"
+            fi
         fi
     fi
 fi
@@ -480,20 +542,23 @@ task_end
 # ============================================================ FR-16 ========
 task_start "FR-16" "Portainer" \
     "GUI for Docker on https://localhost:9443 (container name: portainer, restart=always)."
-if run_docker ps -a --filter name=portainer --format '{{.Names}}' 2>/dev/null | grep -qx portainer; then
-    PSTATE=$(run_docker ps -a --filter name=portainer --format '{{.State}}')
+if portainer_exists; then
+    PSTATE="$(portainer_state)"
     if [[ "$PSTATE" == "running" ]]; then
         ok "portainer container already running"
     else
         run_docker start portainer >/dev/null
         chg "portainer container started"
     fi
+    if run_docker port portainer 2>/dev/null | grep -q '0.0.0.0:9443'; then
+        warn "existing portainer container is LAN-exposed (0.0.0.0:9443) - recreate it to get loopback-only binding: docker rm -f portainer, then rerun"
+    fi
 else
     run_docker volume create portainer_data >/dev/null
-    run_docker run -d -p 9443:9443 --name portainer --restart=always \
+    run_docker run -d -p 127.0.0.1:9443:9443 --name portainer --restart=always \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v portainer_data:/data portainer/portainer-ce:latest >/dev/null
-    chg "portainer container created (image: portainer/portainer-ce:latest)"
+    chg "portainer container created (loopback-only: 127.0.0.1:9443, not reachable from LAN)"
 fi
 task_end
 
@@ -516,9 +581,10 @@ if [[ -n "$DDEV_V" ]] && run_docker info >/dev/null 2>&1; then
 else
     status "ddev" 1 "not installed or docker unreachable"
 fi
-PSTATE=$(run_docker ps -a --filter name=portainer --format '{{.State}}' 2>/dev/null || true)
-if [[ "$PSTATE" == "running" ]] && curl -k -fsS https://localhost:9443 >/dev/null 2>&1; then
-    status "portainer" 0 "running; https://localhost:9443 responds"
+PSTATE=$(portainer_state || true)
+if [[ "$PSTATE" == "running" ]] && \
+   { curl -k -fsS https://127.0.0.1:9443 >/dev/null 2>&1 || curl -k -fsS https://localhost:9443 >/dev/null 2>&1; }; then
+    status "portainer" 0 "running; https://127.0.0.1:9443 responds (loopback-only)"
 else
     status "portainer" 1 "state=${PSTATE:-unknown}"
 fi

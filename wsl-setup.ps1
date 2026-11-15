@@ -174,13 +174,16 @@ sparseVhd=true
     Get-Content $wslconfigPath | ForEach-Object { Write-Host "    $_" }
 
     Write-Step "FR-03 apply: wsl --shutdown"
+    Write-WarnLine "wsl --shutdown stops ALL running WSL distros and sessions - save work in open WSL terminals first."
+    Start-Sleep -Seconds 3
     & wsl.exe --shutdown 2>$null
     Write-Info "WSL shut down - next start uses the new .wslconfig"
 
     if ($capWarn) {
         # Forward FR-04 warning to the Linux final report (documented WSLENV mechanism).
+        # Append to the user's existing WSLENV instead of overwriting it.
         $env:WSL_SETUP_CAP_WARNING = '1'
-        $env:WSLENV = 'WSL_SETUP_CAP_WARNING'
+        $env:WSLENV = if ($env:WSLENV) { "$($env:WSLENV):WSL_SETUP_CAP_WARNING" } else { 'WSL_SETUP_CAP_WARNING' }
     }
 
     $linuxScript = Convert-To-LinuxPath (Join-Path $PSScriptRoot 'provision-wsl.sh')
