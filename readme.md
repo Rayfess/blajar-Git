@@ -83,11 +83,6 @@ for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
   `https://127.0.0.1:9443`, and new WSL sessions open in zsh.
 - If a task FAILs, rerun the script (idempotent) and paste the output for analysis.
 
-### Test Without Installing
-
-The provisioning logic was verified in a stubbed sandbox (Debian fresh/rerun,
-flags, non-Debian abort) — see [wsl-ddev-sim-report.md](wsl-ddev-sim-report.md).
-
 ## Appendix
 
 ### Semantic Commit Messages
