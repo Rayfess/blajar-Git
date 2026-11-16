@@ -31,6 +31,17 @@ function Write-Info([string]$Msg)  { Write-Host "  $Msg" }
 function Write-WarnLine([string]$Msg) { Write-Host "  [WARN] $Msg" -ForegroundColor Yellow }
 function Write-FailLine([string]$Msg) { Write-Host "  [FAIL] $Msg" -ForegroundColor Red }
 
+function Invoke-Wsl([string]$Arguments) {
+    # PS 5.1 quirk (real-run erlog.txt case): with $ErrorActionPreference='Stop',
+    # stderr lines from native commands become terminating errors even when
+    # redirected. Merge streams via cmd and run with 'Continue' so native
+    # warnings (e.g. the experimental Sparse VHD notice) never kill the run.
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & cmd.exe /c "wsl.exe $Arguments 2>&1" }
+    finally { $ErrorActionPreference = $eap }
+}
+
 function Convert-To-LinuxPath([string]$WinPath) {
     $drive = $WinPath.Substring(0, 1).ToLower()
     $rest = $WinPath.Substring(2) -replace '\\', '/'
@@ -77,18 +88,14 @@ $build = [int]$cv.CurrentBuild
 Write-Info ("Windows build: {0} ({1})" -f $build, $cv.DisplayVersion)
 
 $wslVersionLine = $null
-try {
-    $v = (& wsl.exe --version 2>$null)
-    if ($LASTEXITCODE -eq 0) { $wslVersionLine = Clean-WslOutput $v | Select-Object -First 1 }
-} catch { }
+$v = Invoke-Wsl '--version'
+if ($LASTEXITCODE -eq 0) { $wslVersionLine = Clean-WslOutput $v | Select-Object -First 1 }
 if ($wslVersionLine) { Write-Info "WSL: $wslVersionLine" }
 else { Write-Info "WSL: version unavailable (old/inbox WSL or not installed)" }
 
 $distroList = @()
-try {
-    $raw = (& wsl.exe --list --quiet 2>$null)
-    if ($LASTEXITCODE -eq 0) { $distroList = Clean-WslOutput $raw }
-} catch { }
+$raw = Invoke-Wsl '--list --quiet'
+if ($LASTEXITCODE -eq 0) { $distroList = Clean-WslOutput $raw }
 if ($distroList.Count -gt 0) { Write-Info ("Distros: " + ($distroList -join ', ')) }
 else { Write-Info "Distros: none installed" }
 
@@ -157,7 +164,7 @@ if ($distroList.Count -gt 0) {
 [wsl2]
 processors=6
 memory=10GB
-swap=4GB
+swap=1GB
 
 nestedVirtualization=true
 networkingMode=Mirrored
@@ -182,7 +189,7 @@ sparseVhd=true
     Write-Step "FR-03 apply: wsl --shutdown"
     Write-WarnLine "wsl --shutdown stops ALL running WSL distros and sessions - save work in open WSL terminals first."
     Start-Sleep -Seconds 3
-    & wsl.exe --shutdown 2>$null
+    Invoke-Wsl '--shutdown'
     Write-Info "WSL shut down - next start uses the new .wslconfig"
 
     if ($capWarn) {
@@ -202,7 +209,7 @@ sparseVhd=true
     Write-Host ""
     Write-Info "Chaining into Linux provisioning. After ONE sudo password prompt it runs unattended."
     Write-Step ("Chain: wsl -d {0} -e bash {1} {2}" -f $distro, $linuxScript, ($flags -join ' '))
-    & wsl.exe -d $distro -e bash $linuxScript @flags
+    Invoke-Wsl "-d $distro -e bash $linuxScript $($flags -join ' ')"
     exit $LASTEXITCODE
 }
 elseif ($featureEnabled) {
@@ -210,10 +217,10 @@ elseif ($featureEnabled) {
     Write-Step "FR-02 Branch 3: WSL feature enabled, no distro installed"
     Write-Info "Debian-only automation (PRD): installing Debian, no distro picker."
     Write-Info "Installing: wsl --install -d Debian --no-launch"
-    & wsl.exe --install -d Debian --no-launch 2>$null
+    Invoke-Wsl '--install -d Debian --no-launch'
     if ($LASTEXITCODE -ne 0) {
         Write-WarnLine "--no-launch not supported here; running plain wsl --install -d Debian"
-        & wsl.exe --install -d Debian
+        Invoke-Wsl '--install -d Debian'
     }
     Write-Host ""
     Write-Host "[FIRST LAUNCH REQUIRED]" -ForegroundColor Yellow
@@ -225,11 +232,11 @@ elseif ($featureEnabled) {
 else {
     # ---- Branch 2: feature absent -> enable + restart gate ---------------
     Write-Step "FR-02 Branch 2: WSL feature not enabled, no distro installed"
-    Write-Info "Running: wsl --install --no-launch (enables WSL + VirtualMachinePlatform features)"
-    & wsl.exe --install --no-launch 2>$null
+    Write-Info "Running: wsl --install -d Debian --no-launch (enables WSL + VirtualMachinePlatform features)"
+    Invoke-Wsl '--install -d Debian --no-launch'
     if ($LASTEXITCODE -ne 0) {
-        Write-WarnLine "--no-launch not supported here; running plain wsl --install"
-        & wsl.exe --install
+        Write-WarnLine "--no-launch not supported here; running plain wsl --install -d Debian"
+        Invoke-Wsl '--install -d Debian'
     }
     Write-Host ""
     Write-Host "[RESTART REQUIRED]" -ForegroundColor Yellow

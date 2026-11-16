@@ -90,9 +90,10 @@ active, and a list of all existing containers.
 
 ## 4. Product Rules
 
-- `.wslconfig` content matches wslddev.md exactly: processors=6, memory=10GB,
-  swap=4GB, nestedVirtualization=true, networkingMode=Mirrored, autoProxy=false,
-  sparseVhd=true.
+- `.wslconfig` content matches wslddev.md as deliberately adjusted by the owner:
+  processors=6, memory=10GB, swap=1GB (storage-saving adjustment of the
+  doc-exact swap=4GB), nestedVirtualization=true, networkingMode=Mirrored,
+  autoProxy=false, sparseVhd=true.
 - Supported distro, declared deliberately: **Debian >= 12** only (long support,
   server-like role). Fedora, Ubuntu, and everything else is out of scope.
 - **Single-distro rule**: exactly one WSL distro may be installed on the machine.
@@ -129,6 +130,10 @@ active, and a list of all existing containers.
   image track latest stable; the mkcert binary and the zsh plugin tags are
   pinned (supply-chain control). Remote installer scripts are downloaded to a
   file first (inspectable) instead of piped straight into a shell.
+- PowerShell 5.1 native-stderr quirk (learned from the first real run):
+  every wsl.exe call merges stderr into stdout via `cmd /c ... 2>&1` and runs
+  with ErrorActionPreference 'Continue', so native warnings (e.g. the
+  experimental Sparse VHD notice) can never terminate the run.
 - Consequence of `appendWindowsPath=false`, declared deliberately: Windows
   executables (`code`, `explorer.exe`, ...) are not on the WSL PATH, per wslddev.md.
 - If the Windows build or WSL version does not support Mirrored networking or
@@ -149,8 +154,9 @@ below the documented `memory=10GB`). Warns if Docker Desktop is installed
   validates the distro is Debian (aborts otherwise), writes `.wslconfig`
   (FR-03), then chains into Linux provisioning by invoking provision-wsl.sh
   in the distro.
-- Branch 2 - distro absent, WSL feature absent: run `wsl --install`, print
-  restart feedback, exit. Rerunning after restart lands in Branch 3.
+- Branch 2 - distro absent, WSL feature absent: run `wsl --install -d Debian`
+  (Debian-only applies to every branch), print restart feedback, exit.
+  Rerunning after restart lands in Branch 3.
 - Branch 3 - distro absent, WSL feature present: install Debian directly
   (`wsl --install -d Debian`, no distro picker), then exit with first-launch
   instructions (the distro's first launch interactively creates the UNIX

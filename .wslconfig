@@ -1,0 +1,11 @@
+[wsl2]
+processors=6
+memory=10GB
+swap=1GB
+
+nestedVirtualization=true
+networkingMode=Mirrored
+autoProxy=false
+
+[experimental]
+sparseVhd=true
