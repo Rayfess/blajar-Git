@@ -135,7 +135,7 @@ inv() { # label, binary, [version args...]
         v=$("$binname" "${@:---version}" 2>/dev/null | head -n1 || true)
         ok "$label: $c ${v:+[$v]}"
     else
-        skip "$label: not installed"
+        echo "  [ABSENT] $label: not installed (queued for installation in FR-08+)"
     fi
 }
 inv docker docker --version
@@ -150,12 +150,12 @@ if c="$(command -v bun 2>/dev/null)" || [[ -x "$HOME/.bun/bin/bun" ]]; then
     BUN_BIN="${c:-$HOME/.bun/bin/bun}"
     ok "bun: $BUN_BIN [$("$BUN_BIN" --version)]"
 else
-    skip "bun: not installed"
+    echo "  [ABSENT] bun: not installed (queued for installation in FR-08)"
 fi
-if command -v mkcert >/dev/null 2>&1; then ok "mkcert: $(command -v mkcert)"; else skip "mkcert: not installed"; fi
+if command -v mkcert >/dev/null 2>&1; then ok "mkcert: $(command -v mkcert)"; else echo "  [ABSENT] mkcert: not installed (queued for installation in FR-14)"; fi
 if command -v docker >/dev/null 2>&1; then
     PT=$(sudo docker ps -a --format '{{.Names}} {{.State}}' 2>/dev/null | awk '$1 == "portainer" { print $2 }')
-    if [[ -n "$PT" ]]; then ok "portainer container: $PT"; else skip "portainer container: not present"; fi
+    if [[ -n "$PT" ]]; then ok "portainer container: $PT"; else echo "  [ABSENT] portainer container: not present (created in FR-16)"; fi
 fi
 task_end
 
@@ -321,18 +321,16 @@ task_end
 
 # ============================================================ FR-10 ========
 task_start "FR-10" "Cleanup conflicting providers" \
-    "Official Docker docs: remove conflicting packages before Docker CE (skip if not installed)."
+    "Official Docker docs (verbatim): run the removal loop unconditionally; apt tolerates absent packages ('not installed, so not removed')."
 CONFLICTS=(docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc)
-TO_REMOVE=()
 for p in "${CONFLICTS[@]}"; do
-    if pm_installed "$p"; then TO_REMOVE+=("$p"); fi
+    if pm_installed "$p"; then
+        pm_remove "$p"
+        chg "removed conflicting package: $p"
+    else
+        echo "  [SANITIZE] $p: absent - nothing to remove (docs loop ran regardless)"
+    fi
 done
-if [[ ${#TO_REMOVE[@]} -gt 0 ]]; then
-    pm_remove "${TO_REMOVE[@]}"
-    chg "removed: ${TO_REMOVE[*]}"
-else
-    skip "no conflicting packages installed"
-fi
 task_end
 
 # ============================================================ FR-11 ========

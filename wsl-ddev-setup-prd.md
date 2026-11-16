@@ -214,7 +214,8 @@ newly opened sessions.
 ### FR-10 - Cleanup Conflicting Packages
 Removes conflicting packages per the official Docker docs (docker.io,
 docker-compose, docker-compose-v2, docker-doc, podman-docker, containerd, runc),
-skipping packages that are not installed.
+running the docs loop unconditionally: absent packages are tolerated by apt
+("not installed, so not removed"), so the sanitizer always executes.
 
 ### FR-11 - Install Docker
 If installed: prints version and continues. Otherwise: adds Docker's official
