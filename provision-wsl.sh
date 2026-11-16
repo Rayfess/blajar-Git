@@ -64,18 +64,37 @@ ZSH_SYNTAX_HIGHLIGHTING_REF="0.8.0"    # github.com/zsh-users/zsh-syntax-highlig
 # ------------------------------------------------- presentation (FR-17) ----
 TOTAL=13
 CURRENT=0
+RUN_START_TS=$SECONDS
+TASK_START_TS=0
+TASK_CHG=0
+fmt_time(){ local s="$1"; printf '%dm%02ds' $(( s / 60 )) $(( s % 60 )); }
+progress_bar(){ local done_n="$1"; local filled=$(( 26 * done_n / TOTAL )); \
+  printf '%*s' "$filled" '' | tr ' ' '#'; printf '%*s' "$(( 26 - filled ))" '' | tr ' ' '-'; }
 task_start() { # $1 FR id, $2 title, $3 description
     CURRENT=$((CURRENT + 1))
+    TASK_START_TS=$SECONDS
+    TASK_CHG=0
     echo ""
     echo "=================================================================="
     echo "[$CURRENT/$TOTAL] $1 - $2"
+    echo "  progress [$(progress_bar $(( CURRENT - 1 )))] $(( (CURRENT - 1) * 100 / TOTAL ))% | started $(date '+%H:%M:%S')"
     echo "------------------------------------------------------------------"
     echo "$3"
 }
-task_end() { echo "--- done ---"; sleep "$PAUSE"; }
+task_end() {
+    local took=$(( SECONDS - TASK_START_TS ))
+    local elapsed=$(( SECONDS - RUN_START_TS ))
+    local pct=$(( CURRENT * 100 / TOTAL ))
+    if [[ $TASK_CHG -eq 0 ]]; then
+        echo "--- stage completed: nothing to do (all present) | took $(fmt_time "$took") | [$(progress_bar "$CURRENT")] ${pct}% | run elapsed $(fmt_time "$elapsed") ---"
+    else
+        echo "--- stage completed: $TASK_CHG change(s) | took $(fmt_time "$took") | [$(progress_bar "$CURRENT")] ${pct}% | run elapsed $(fmt_time "$elapsed") ---"
+    fi
+    sleep "$PAUSE"
+}
 
 ok()   { echo "  [OK]   $*"; }
-chg()  { echo "  [CHG]  $*"; }
+chg()  { echo "  [CHG]  $*"; TASK_CHG=$((TASK_CHG + 1)); }
 skip() { echo "  [SKIP] $*"; }
 warn() { echo "  [WARN] $*"; }
 die()  { echo "  [ABORT] $*" >&2; exit 1; }
@@ -527,6 +546,7 @@ echo ""
 echo "  All containers (docker ps -a):"
 run_docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' | sed 's/^/    /'
 echo ""
+echo "  total run runtime: $(fmt_time "$SECONDS")"
 if [[ "$FAIL" == "0" ]]; then
     echo "RESULT: PASS - environment ready (no project created, per definition of done)"
 else

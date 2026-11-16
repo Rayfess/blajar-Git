@@ -31,6 +31,32 @@ function Write-Info([string]$Msg)  { Write-Host "  $Msg" }
 function Write-WarnLine([string]$Msg) { Write-Host "  [WARN] $Msg" -ForegroundColor Yellow }
 function Write-FailLine([string]$Msg) { Write-Host "  [FAIL] $Msg" -ForegroundColor Red }
 
+# --- run/stage progress tracking (UX feedback) ---
+$script:RunStart = Get-Date
+$script:StageTotal = 4   # Branch 1: preflight -> decision -> config -> chain; gates use 3
+$script:StageIndex = 0
+$script:StageSw = $null
+function Write-Stage([string]$Name) {
+    $script:StageIndex++
+    $script:StageSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $pct = [int](($script:StageIndex - 1) * 100 / $script:StageTotal)
+    $filled = [int](26 * ($script:StageIndex - 1) / $script:StageTotal)
+    $bar = ('#' * $filled) + ('-' * (26 - $filled))
+    Write-Host ""
+    Write-Host "=================================================================="
+    Write-Host ("[STAGE {0}/{1}] {2}" -f $script:StageIndex, $script:StageTotal, $Name)
+    Write-Host ("  progress [{0}] {1}% | started {2}" -f $bar, $pct, (Get-Date -Format 'HH:mm:ss'))
+    Write-Host "------------------------------------------------------------------"
+}
+function Complete-Stage([string]$Note) {
+    $script:StageSw.Stop()
+    $pct = [int]($script:StageIndex * 100 / $script:StageTotal)
+    $filled = [int](26 * $script:StageIndex / $script:StageTotal)
+    $bar = ('#' * $filled) + ('-' * (26 - $filled))
+    $totalElapsed = [int]((Get-Date) - $script:RunStart).TotalSeconds
+    Write-Host ("  --- stage completed: {0} | took {1:n1}s | [{2}] {3}% | run elapsed {4}s ---" -f $Note, $script:StageSw.Elapsed.TotalSeconds, $bar, $pct, $totalElapsed) -ForegroundColor DarkGray
+}
+
 function Invoke-Wsl([string]$Arguments) {
     # PS 5.1 quirk (real-run erlog.txt case): with $ErrorActionPreference='Stop',
     # stderr lines from native commands become terminating errors even when
@@ -67,7 +93,7 @@ function Get-DefaultDistro {
 # ---------------------------------------------------------------------------
 # FR-01 - Windows preflight
 # ---------------------------------------------------------------------------
-Write-Step "FR-01 Windows preflight"
+Write-Stage "FR-01 Windows preflight"
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -156,7 +182,8 @@ if ($distroList.Count -gt 0) {
         Write-Info "Switch:  wsl --unregister '$distro'   then   wsl --install -d Debian   and rerun."
         exit 1
     }
-    Write-Step ("FR-02 Branch 1: distro '{0}' installed" -f $distro)
+    Write-Stage ("FR-02 Branch 1: distro '{0}' validated (Debian)" -f $distro)
+    Complete-Stage "single-distro rule satisfied"
 
     # FR-03 - write .wslconfig (doc-exact, wslddev.md lines 36-48)
     $marker = '# managed by wsl-setup.ps1 (wsl-ddev-setup-prd.md) - doc-exact values from wslddev.md'
@@ -186,11 +213,12 @@ sparseVhd=true
     Write-Info "Wrote $wslconfigPath :"
     Get-Content $wslconfigPath | ForEach-Object { Write-Host "    $_" }
 
-    Write-Step "FR-03 apply: wsl --shutdown"
+    Write-Stage "FR-03 apply .wslconfig (wsl --shutdown)"
     Write-WarnLine "wsl --shutdown stops ALL running WSL distros and sessions - save work in open WSL terminals first."
     Start-Sleep -Seconds 3
     Invoke-Wsl '--shutdown'
     Write-Info "WSL shut down - next start uses the new .wslconfig"
+    Complete-Stage "config applied - WSL shut down"
 
     if ($capWarn) {
         # Forward FR-04 warning to the Linux final report (documented WSLENV mechanism).
@@ -208,13 +236,15 @@ sparseVhd=true
 
     Write-Host ""
     Write-Info "Chaining into Linux provisioning. After ONE sudo password prompt it runs unattended."
-    Write-Step ("Chain: wsl -d {0} -e bash {1} {2}" -f $distro, $linuxScript, ($flags -join ' '))
+    Write-Stage ("Chain: wsl -d {0} -e bash {1}" -f $distro, $linuxScript)
     Invoke-Wsl "-d $distro -e bash $linuxScript $($flags -join ' ')"
+    Complete-Stage "Linux provisioning finished - check RESULT above"
     exit $LASTEXITCODE
 }
 elseif ($featureEnabled) {
     # ---- Branch 3: feature present, no distro -> install Debian directly --
-    Write-Step "FR-02 Branch 3: WSL feature enabled, no distro installed"
+    $script:StageTotal = 3
+    Write-Stage "FR-02 Branch 3: WSL feature enabled, no distro installed"
     Write-Info "Debian-only automation (PRD): installing Debian, no distro picker."
     Write-Info "Installing: wsl --install -d Debian --no-launch"
     Invoke-Wsl '--install -d Debian --no-launch'
@@ -222,6 +252,7 @@ elseif ($featureEnabled) {
         Write-WarnLine "--no-launch not supported here; running plain wsl --install -d Debian"
         Invoke-Wsl '--install -d Debian'
     }
+    Complete-Stage "Debian installed - first launch required, then rerun"
     Write-Host ""
     Write-Host "[FIRST LAUNCH REQUIRED]" -ForegroundColor Yellow
     Write-Host "  1. Open the distro first launch:  wsl -d Debian   (or Start menu -> Debian)"
@@ -231,13 +262,15 @@ elseif ($featureEnabled) {
 }
 else {
     # ---- Branch 2: feature absent -> enable + restart gate ---------------
-    Write-Step "FR-02 Branch 2: WSL feature not enabled, no distro installed"
+    $script:StageTotal = 3
+    Write-Stage "FR-02 Branch 2: WSL feature not enabled, no distro installed"
     Write-Info "Running: wsl --install -d Debian --no-launch (enables WSL + VirtualMachinePlatform features)"
     Invoke-Wsl '--install -d Debian --no-launch'
     if ($LASTEXITCODE -ne 0) {
         Write-WarnLine "--no-launch not supported here; running plain wsl --install -d Debian"
         Invoke-Wsl '--install -d Debian'
     }
+    Complete-Stage "WSL feature installed - restart required, then rerun"
     Write-Host ""
     Write-Host "[RESTART REQUIRED]" -ForegroundColor Yellow
     Write-Host "  1. Restart Windows to finish enabling the WSL features."
