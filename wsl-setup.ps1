@@ -27,7 +27,8 @@ function Write-Step([string]$Title) {
     Write-Host ""
     Write-Host "=== $Title ===" -ForegroundColor Cyan
 }
-function Write-Info([string]$Msg)  { Write-Host "  $Msg" }
+function Write-Info([string]$Msg)  { Write-Host "  $Msg" -ForegroundColor White }
+function Write-Ok([string]$Msg)    { Write-Host "  [OK] $Msg" -ForegroundColor Green }
 function Write-WarnLine([string]$Msg) { Write-Host "  [WARN] $Msg" -ForegroundColor Yellow }
 function Write-FailLine([string]$Msg) { Write-Host "  [FAIL] $Msg" -ForegroundColor Red }
 
@@ -43,10 +44,10 @@ function Write-Stage([string]$Name) {
     $filled = [int](26 * ($script:StageIndex - 1) / $script:StageTotal)
     $bar = ('#' * $filled) + ('-' * (26 - $filled))
     Write-Host ""
-    Write-Host "=================================================================="
-    Write-Host ("[STAGE {0}/{1}] {2}" -f $script:StageIndex, $script:StageTotal, $Name)
-    Write-Host ("  progress [{0}] {1}% | started {2}" -f $bar, $pct, (Get-Date -Format 'HH:mm:ss'))
-    Write-Host "------------------------------------------------------------------"
+    Write-Host "==================================================================" -ForegroundColor DarkGray
+    Write-Host ("[STAGE {0}/{1}] {2}" -f $script:StageIndex, $script:StageTotal, $Name) -ForegroundColor Cyan
+    Write-Host ("  progress [{0}] {1}% | started {2}" -f $bar, $pct, (Get-Date -Format 'HH:mm:ss')) -ForegroundColor DarkGray
+    Write-Host "------------------------------------------------------------------" -ForegroundColor DarkGray
 }
 function Complete-Stage([string]$Note) {
     $script:StageSw.Stop()
@@ -245,7 +246,7 @@ sparseVhd=true
         Complete-Stage "blocked: no default UNIX user (first launch missing)"
         exit 1
     }
-    Write-Info "Default WSL user: $defaultUser"
+    Write-Ok "Default WSL user: $defaultUser"
     Write-Stage ("Chain: wsl -d {0} -e bash {1}" -f $distro, $linuxScript)
     Invoke-Wsl "-d $distro -e bash $linuxScript $($flags -join ' ')"
     if ($LASTEXITCODE -eq 0) {

@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
         --skip-ca-import)       SKIP_CA=1 ;;
         --with-zsh-completions) WITH_COMPLETIONS=1 ;;
         --pause)                PAUSE="${2:?--pause needs a value}"; shift ;;
-        *) echo "[ABORT] Unknown flag: $1" >&2; exit 2 ;;
+        *) echo "${C_FAIL}[ABORT] Unknown flag: $1${C_RESET}" >&2; exit 2 ;;
     esac
     shift
 done
@@ -38,9 +38,9 @@ done
 # plugins) must land in YOUR home, and 'usermod -aG docker' must target YOUR
 # user. The script elevates via sudo only where required.
 if [[ $EUID -eq 0 ]]; then
-    echo "[ABORT] Running as root is not supported. Run as your normal WSL user." >&2
+    echo "${C_FAIL}[ABORT] Running as root is not supported. Run as your normal WSL user.${C_RESET}" >&2
     echo "        (Installs would land in /root and 'usermod' would target the wrong user.)" >&2
-    echo "        Debian without a completed first launch defaults to root:" >&2
+    echo "${C_FAIL}        Debian without a completed first launch defaults to root:${C_RESET}" >&2
     echo "        launch 'wsl -d Debian' once, create your UNIX user, then rerun this script." >&2
     exit 1
 fi
@@ -69,6 +69,23 @@ CURRENT=0
 RUN_START_TS=$SECONDS
 TASK_START_TS=0
 TASK_CHG=0
+# ---- output colors: one distinct color per message type, consistent with the
+# ---- Windows phase (pwsh). Enabled only on a real terminal (-t 1); piped or
+# ---- captured output (tests, logs) stays plain so assertions never break.
+if [[ -t 1 ]]; then
+    C_STAGE=$'\e[1;36m'    # process/stage header      - bold cyan
+    C_OK=$'\e[0;32m'       # success                   - green
+    C_CHG=$'\e[0;35m'      # change made               - magenta
+    C_ABSENT=$'\e[0;34m'   # pending (not installed)   - blue
+    C_SANITIZE=$'\e[0;93m' # docs sanitizer loop       - bright yellow
+    C_SKIP=$'\e[0;90m'     # skipped (already present) - gray
+    C_WARN=$'\e[0;33m'     # warning                   - yellow
+    C_FAIL=$'\e[1;31m'     # error/abort               - bold red
+    C_BAR=$'\e[0;90m'      # progress/footer structure - gray
+    C_RESET=$'\e[0m'
+else
+    C_STAGE=''; C_OK=''; C_CHG=''; C_ABSENT=''; C_SANITIZE=''; C_SKIP=''; C_WARN=''; C_FAIL=''; C_BAR=''; C_RESET=''
+fi
 fmt_time(){ local s="$1"; printf '%dm%02ds' $(( s / 60 )) $(( s % 60 )); }
 progress_bar(){ local done_n="$1"; local filled=$(( 26 * done_n / TOTAL )); \
   printf '%*s' "$filled" '' | tr ' ' '#'; printf '%*s' "$(( 26 - filled ))" '' | tr ' ' '-'; }
@@ -77,10 +94,10 @@ task_start() { # $1 FR id, $2 title, $3 description
     TASK_START_TS=$SECONDS
     TASK_CHG=0
     echo ""
-    echo "=================================================================="
-    echo "[$CURRENT/$TOTAL] $1 - $2"
-    echo "  progress [$(progress_bar $(( CURRENT - 1 )))] $(( (CURRENT - 1) * 100 / TOTAL ))% | started $(date '+%H:%M:%S')"
-    echo "------------------------------------------------------------------"
+    echo "${C_STAGE}==================================================================${C_RESET}"
+    echo "${C_STAGE}[$CURRENT/$TOTAL] $1 - $2${C_RESET}"
+    echo "${C_BAR}  progress [$(progress_bar $(( CURRENT - 1 )))] $(( (CURRENT - 1) * 100 / TOTAL ))% | started $(date '+%H:%M:%S')${C_RESET}"
+    echo "${C_STAGE}------------------------------------------------------------------${C_RESET}"
     echo "$3"
 }
 task_end() {
@@ -88,18 +105,20 @@ task_end() {
     local elapsed=$(( SECONDS - RUN_START_TS ))
     local pct=$(( CURRENT * 100 / TOTAL ))
     if [[ $TASK_CHG -eq 0 ]]; then
-        echo "--- stage completed: nothing to do (all present) | took $(fmt_time "$took") | [$(progress_bar "$CURRENT")] ${pct}% | run elapsed $(fmt_time "$elapsed") ---"
+        echo "${C_BAR}--- stage completed: nothing to do (all present) | took $(fmt_time "$took") | [$(progress_bar "$CURRENT")] ${pct}% | run elapsed $(fmt_time "$elapsed") ---${C_RESET}"
     else
-        echo "--- stage completed: $TASK_CHG change(s) | took $(fmt_time "$took") | [$(progress_bar "$CURRENT")] ${pct}% | run elapsed $(fmt_time "$elapsed") ---"
+        echo "${C_BAR}--- stage completed: $TASK_CHG change(s) | took $(fmt_time "$took") | [$(progress_bar "$CURRENT")] ${pct}% | run elapsed $(fmt_time "$elapsed") ---${C_RESET}"
     fi
     sleep "$PAUSE"
 }
 
-ok()   { echo "  [OK]   $*"; }
-chg()  { echo "  [CHG]  $*"; TASK_CHG=$((TASK_CHG + 1)); }
-skip() { echo "  [SKIP] $*"; }
-warn() { echo "  [WARN] $*"; }
-die()  { echo "  [ABORT] $*" >&2; exit 1; }
+ok()   { echo "  ${C_OK}[OK]${C_RESET}   $*"; }
+chg()  { echo "  ${C_CHG}[CHG]${C_RESET}  $*"; TASK_CHG=$((TASK_CHG + 1)); }
+skip() { echo "  ${C_SKIP}[SKIP]${C_RESET} $*"; }
+warn() { echo "  ${C_WARN}[WARN]${C_RESET} $*"; }
+die()  { echo "  ${C_FAIL}[ABORT]${C_RESET} $*" >&2; exit 1; }
+ab()   { echo "  ${C_ABSENT}[ABSENT]${C_RESET} $*"; }
+san()  { echo "  ${C_SANITIZE}[SANITIZE]${C_RESET} $*"; }
 
 # --------------------------------- sudo keepalive (one prompt, kept alive) -
 SUDO_KEEPALIVE_PID=""
@@ -156,7 +175,7 @@ inv() { # label, binary, [version args...]
         v=$("$binname" "${@:---version}" 2>/dev/null | head -n1 || true)
         ok "$label: $c ${v:+[$v]}"
     else
-        echo "  [ABSENT] $label: not installed (queued for installation in FR-08+)"
+        ab "$label: not installed (queued for installation in FR-08+)"
     fi
 }
 inv docker docker --version
@@ -171,12 +190,12 @@ if c="$(command -v bun 2>/dev/null)" || [[ -x "$HOME/.bun/bin/bun" ]]; then
     BUN_BIN="${c:-$HOME/.bun/bin/bun}"
     ok "bun: $BUN_BIN [$("$BUN_BIN" --version)]"
 else
-    echo "  [ABSENT] bun: not installed (queued for installation in FR-08)"
+    ab "bun: not installed (queued for installation in FR-08)"
 fi
-if command -v mkcert >/dev/null 2>&1; then ok "mkcert: $(command -v mkcert)"; else echo "  [ABSENT] mkcert: not installed (queued for installation in FR-14)"; fi
+if command -v mkcert >/dev/null 2>&1; then ok "mkcert: $(command -v mkcert)"; else ab "mkcert: not installed (queued for installation in FR-14)"; fi
 if command -v docker >/dev/null 2>&1; then
     PT=$(sudo docker ps -a --format '{{.Names}} {{.State}}' 2>/dev/null | awk '$1 == "portainer" { print $2 }')
-    if [[ -n "$PT" ]]; then ok "portainer container: $PT"; else echo "  [ABSENT] portainer container: not present (created in FR-16)"; fi
+    if [[ -n "$PT" ]]; then ok "portainer container: $PT"; else ab "portainer container: not present (created in FR-16)"; fi
 fi
 task_end
 
@@ -349,7 +368,7 @@ for p in "${CONFLICTS[@]}"; do
         pm_remove "$p"
         chg "removed conflicting package: $p"
     else
-        echo "  [SANITIZE] $p: absent - nothing to remove (docs loop ran regardless)"
+        san "$p: absent - nothing to remove (docs loop ran regardless)"
     fi
 done
 task_end
@@ -523,7 +542,7 @@ task_start "FR-18" "Final status report" \
     "Definition of done: status of docker, ddev, Portainer + all containers. No project is created."
 FAIL=0
 status() { # name, 0=pass|1=fail, detail
-    if [[ "$2" == "0" ]]; then echo "  [PASS] $1: $3"; else echo "  [FAIL] $1: $3"; FAIL=1; fi
+    if [[ "$2" == "0" ]]; then echo "  ${C_OK}[PASS]${C_RESET} $1: $3"; else echo "  ${C_FAIL}[FAIL]${C_RESET} $1: $3"; FAIL=1; fi
 }
 DOCKER_STATE=$(sudo systemctl is-active docker 2>/dev/null || true)
 if [[ "$DOCKER_STATE" == "active" ]]; then
@@ -554,8 +573,8 @@ run_docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' | sed 's/^
 echo ""
 echo "  total run runtime: $(fmt_time "$SECONDS")"
 if [[ "$FAIL" == "0" ]]; then
-    echo "RESULT: PASS - environment ready (no project created, per definition of done)"
+    echo "${C_OK}RESULT: PASS - environment ready (no project created, per definition of done)${C_RESET}"
 else
-    echo "RESULT: FAIL - see [FAIL] items above"
+    echo "${C_FAIL}RESULT: FAIL - see [FAIL] items above${C_RESET}"
 fi
 exit "$FAIL"
