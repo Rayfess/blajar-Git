@@ -155,8 +155,11 @@ below the documented `memory=10GB`). Warns if Docker Desktop is installed
   (FR-03), then chains into Linux provisioning by invoking provision-wsl.sh
   in the distro.
 - Branch 2 - distro absent, WSL feature absent: run `wsl --install -d Debian`
-  (Debian-only applies to every branch), print restart feedback, exit.
-  Rerunning after restart lands in Branch 3.
+  (Debian-only applies to every branch), print restart feedback, exit. The
+  restart is for the Windows feature activation only (first-time); the Debian
+  distro itself never requires one. Rerunning after restart lands in Branch 1,
+  whose default-user preflight expects the first launch to have created the
+  UNIX user.
 - Branch 3 - distro absent, WSL feature present: install Debian directly
   (`wsl --install -d Debian`, no distro picker), then exit with first-launch
   instructions (the distro's first launch interactively creates the UNIX

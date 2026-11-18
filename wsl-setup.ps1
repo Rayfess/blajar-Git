@@ -279,7 +279,9 @@ else {
     # ---- Branch 2: feature absent -> enable + restart gate ---------------
     $script:StageTotal = 3
     Write-Stage "FR-02 Branch 2: WSL feature not enabled, no distro installed"
-    Write-Info "Running: wsl --install -d Debian --no-launch (enables WSL + VirtualMachinePlatform features)"
+    Write-Info "Running: wsl --install -d Debian --no-launch - one command, two effects:"
+    Write-Info "  1. enables Windows features (Microsoft-Windows-Subsystem-Linux + VirtualMachinePlatform) -> RESTART required, first-time only"
+    Write-Info "  2. unpacks the Debian distro -> the distro itself never needs a restart"
     Invoke-Wsl '--install -d Debian --no-launch'
     if ($LASTEXITCODE -ne 0) {
         Write-WarnLine "--no-launch not supported here; running plain wsl --install -d Debian"
@@ -288,7 +290,10 @@ else {
     Complete-Stage "WSL feature installed - restart required, then rerun"
     Write-Host ""
     Write-Host "[RESTART REQUIRED]" -ForegroundColor Yellow
+    Write-Host "  This restart is for the Windows features only (first-time activation) -"
+    Write-Host "  the Debian distro itself never needs one."
     Write-Host "  1. Restart Windows to finish enabling the WSL features."
-    Write-Host "  2. Run this script again (same command) - it will offer the distro list."
+    Write-Host "  2. Run this script again (same command) - the distro is already unpacked,"
+    Write-Host "     so it goes straight to the first-launch check, then provisioning."
     exit 0
 }

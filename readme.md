@@ -82,6 +82,9 @@ for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
 - After PASS: `cd ~/projects/<project> && ddev start`, Portainer at
   `https://127.0.0.1:9443`, and new WSL sessions open in zsh.
 - If a task FAILs, rerun the script (idempotent) and paste the output for analysis.
+- The Windows restart is needed only once, for enabling the WSL features —
+  installing a distro never requires one. (`wsl --shutdown` after writing
+  `.wslconfig` is not a reboot; it just restarts the WSL VM to apply the config.)
 
 ## Appendix
 
