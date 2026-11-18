@@ -40,6 +40,8 @@ done
 if [[ $EUID -eq 0 ]]; then
     echo "[ABORT] Running as root is not supported. Run as your normal WSL user." >&2
     echo "        (Installs would land in /root and 'usermod' would target the wrong user.)" >&2
+    echo "        Debian without a completed first launch defaults to root:" >&2
+    echo "        launch 'wsl -d Debian' once, create your UNIX user, then rerun this script." >&2
     exit 1
 fi
 
@@ -391,7 +393,11 @@ task_end
 task_start "FR-12" "Docker verification" \
     "docker run hello-world without sudo (group applied in-session via sg docker)."
 run_docker() {
-    if id -nG "$USER" | grep -qw docker; then
+    # NOTE: 'id -nG "$USER"' reads the group DATABASE - which usermod already
+    # updated - while the CURRENT session's process groups (what the socket
+    # permission actually follows) only refresh on a new login. Check the
+    # session groups instead, then fall back to sg when not yet applied.
+    if id -nG 2>/dev/null | grep -qw docker; then
         docker "$@"
     else
         sg docker -c "$(printf '%q ' docker "$@")"
