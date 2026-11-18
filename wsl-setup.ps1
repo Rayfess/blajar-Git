@@ -236,9 +236,24 @@ sparseVhd=true
 
     Write-Host ""
     Write-Info "Chaining into Linux provisioning. After ONE sudo password prompt it runs unattended."
+    # Default-user preflight: a distro without a completed first launch runs as
+    # root - catch it here with clear instructions instead of dying inside FR-05.
+    $defaultUser = (Invoke-Wsl "-d $distro -e id -un" | Clean-WslOutput | Select-Object -First 1)
+    if (-not $defaultUser -or $defaultUser -eq 'root') {
+        Write-FailLine "Debian default user is '$defaultUser' - provisioning refuses to run as root."
+        Write-Info "Fix: launch 'wsl -d $distro' once, create your UNIX user, then rerun this script."
+        Complete-Stage "blocked: no default UNIX user (first launch missing)"
+        exit 1
+    }
+    Write-Info "Default WSL user: $defaultUser"
     Write-Stage ("Chain: wsl -d {0} -e bash {1}" -f $distro, $linuxScript)
     Invoke-Wsl "-d $distro -e bash $linuxScript $($flags -join ' ')"
-    Complete-Stage "Linux provisioning finished - check RESULT above"
+    if ($LASTEXITCODE -eq 0) {
+        Complete-Stage "Linux provisioning finished - RESULT: PASS above"
+    } else {
+        Write-FailLine "Linux provisioning FAILED (exit $LASTEXITCODE) - read the [ABORT]/[FAIL] lines above, fix, then rerun."
+        Complete-Stage "provisioning failed - see error above"
+    }
     exit $LASTEXITCODE
 }
 elseif ($featureEnabled) {
