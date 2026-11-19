@@ -32,7 +32,7 @@ development environment:
 
 In Scope:
 - Windows: WSL feature enablement, Debian installation via decision tree,
-  `.wslconfig` generation, chaining into Linux provisioning
+  `.wslconfig` generation, printed handoff guide into the Linux phase
 - Linux: `/etc/wsl.conf`, package index refresh (+ optional upgrade), development
   tools, zsh with essential plugins, Docker CE, DDEV, mkcert (+ CA import to
   Windows), Portainer
@@ -62,14 +62,14 @@ Two automations:
 
 ### provision-wsl.sh (Linux / WSL)
 - Executable: bash inside the WSL distro
-- Invoked two ways:
-  - chained automatically by wsl-setup.ps1:
-    `wsl -d <distro> -e bash <repo-path>/provision-wsl.sh`
-  - manually from inside WSL: `bash provision-wsl.sh`
+- Invoked from inside Debian, after the user copies it from the automounted
+  repo path into the Linux filesystem (containment: the script runs from the
+  Linux filesystem, not from the Windows mount):
+  `cp /mnt/<repo-path>/provision-wsl.sh ~/ && bash ~/provision-wsl.sh`
+- The exact copy/run commands are printed by wsl-setup.ps1 at handoff
 - Unattended after the single sudo password prompt
-- Flags: `--upgrade` (also run a full package upgrade), `--skip-ca-import`,
-  `--with-zsh-completions` (opt-in zsh-completions plugin),
-  `--pause <seconds>` (default 5)
+- Flags: `--no-upgrade` (skip the default full base upgrade), `--skip-ca-import`,
+  `--log <file>` (full transcript for forensics), `--pause <seconds>` (default 5)
 
 ## 3. Use Cases
 
@@ -161,22 +161,27 @@ below the documented `memory=10GB`). Warns if Docker Desktop is installed
 - Branch 1 - distro installed: enforces the single-distro rule (aborts with
   the list of registered distros and removal instructions if more than one),
   validates the distro is Debian (aborts otherwise), writes `.wslconfig`
-  (FR-03), then chains into Linux provisioning by invoking provision-wsl.sh
-  in the distro. A default-user gate runs before the chain: when the distro
-  still defaults to root (native first launch not completed), the script
-  exits with the documented first-launch instructions — launch `wsl -d
-  Debian` once and create the UNIX username and password through the
-  distro's own setup (learn.microsoft.com/windows/wsl) — then rerunning
-  continues into the chain as that user. Credentials are typed natively in
-  Debian and never pass through PowerShell.
+  (FR-03), then ends with a printed guide for the manual handoff — the
+  Windows phase stops here (containment). The guide covers: the native
+  first launch (when the distro still defaults to root, its own setup asks
+  for the UNIX username and password — the documented flow per
+  learn.microsoft.com/windows/wsl), copying the provisioner from the
+  automounted repo path into the Linux filesystem, running it from `~`, and
+  optional cleanup. Credentials are typed natively in Debian and never pass
+  through PowerShell. Rerunning wsl-setup.ps1 after provisioning is harmless
+  (idempotent guidance).
 - Branch 2 - distro absent, WSL feature absent: run `wsl --install -d Debian`
   (Debian-only applies to every branch), print restart feedback, exit. The
   restart is for the Windows feature activation only (first-time); the Debian
-  distro itself never requires one. Rerunning after restart lands in Branch 1,
-  whose default-user gate guides the native first launch.
+  distro itself never requires one. Distro download: retry with backoff, then
+  `--web-download` fallback — bypasses the Store CDN when
+  `WININET_E_CONNECTION_RESET` hits (documented fix per
+  learn.microsoft.com/windows/wsl/install). Rerunning after restart lands in
+  Branch 1, whose guide covers the native first launch.
 - Branch 3 - distro absent, WSL feature present: install Debian directly
-  (`wsl --install -d Debian`, no distro picker), then exit. Rerunning lands
-  in Branch 1, whose default-user gate guides the native first launch.
+  (`wsl --install -d Debian`, no distro picker) with the same download
+  retry + `--web-download` fallback, then exit. Rerunning lands
+  in Branch 1, whose guide covers the native first launch.
 
 ### FR-03 - Write .wslconfig
 Writes `%UserProfile%\.wslconfig` with the exact documented content, shows the
@@ -205,8 +210,9 @@ systemd is not yet active, exits with restart instructions (`wsl --shutdown`
 from PowerShell); on rerun it continues.
 
 ### FR-07 - Package Index
-Refreshes the package index every run (`apt-get update`). Runs a full upgrade
-only with the `--upgrade` flag.
+Refreshes the package index every run (`apt-get update`). A full base upgrade
+(`apt-get upgrade`) runs by default; `--no-upgrade` skips it (speed-first
+rerun).
 
 ### FR-08 - Development Tools
 Installs only items missing from the tool list defined at the top of the script.
@@ -265,9 +271,16 @@ success.
 
 ### FR-16 - Portainer
 If the container exists: starts it if stopped, otherwise reports running, and
-warns when an existing container is bound to `0.0.0.0` (LAN-exposed).
+recreates it automatically when it lacks the mkcert TLS cert or is bound to
+`0.0.0.0` (LAN-exposed).
 Otherwise: creates the volume and container per wslddev.md, bound to loopback
-only (`127.0.0.1:9443`) so it is not reachable from the local network.
+only (`127.0.0.1:9443`) so it is not reachable from the local network, and
+serves a mkcert-signed cert for `localhost 127.0.0.1` (generated in this
+stage — scoped to Portainer's listener; mkcert itself is the project-wide
+TLS authority used by DDEV, see the readme) so the Windows browser shows no
+warning. `http://127.0.0.1:9000` remains available as an unencrypted
+fallback. Certs live in a persistent dir (`~/.local/share/portainer-tls`) —
+never `/tmp`, which Debian tmpfiles wipes on every VM boot.
 
 ### FR-17 - Verbose Execution
 Each task prints a header, what it does, and the changes it made; the script
@@ -280,15 +293,18 @@ has no daemon of its own), Portainer container state plus
 `https://127.0.0.1:9443` responding (`curl -k`), and `docker ps -a` listing
 all containers. Each status item is marked PASS/FAIL; the script exits
 non-zero if any item fails.
+After the report, the script restarts WSL (`wsl.exe --shutdown` via interop)
+so all applied configuration takes effect — the terminal closes by design.
+After the report, the script restarts WSL (`wsl.exe --shutdown` via interop)
+so all applied configuration takes effect — the terminal closes by design.
 
 ## 7. Acceptance Criteria
 
 - From bare Windows (no WSL feature): wsl-setup.ps1 installs the feature, prints
   restart feedback, and rerunning after restart reaches Branch 3.
 - From Branch 3: Debian is installed directly (no picker); the first launch
-  (native setup — create your UNIX user) is completed manually in the Debian
-  terminal, and rerunning chains into Linux provisioning without further
-  prompts.
+  (native setup — create your UNIX user) and the provisioning run are
+  completed manually in the Debian terminal, guided by the printed commands.
 - With more than one distro registered, Branch 1 aborts with the full list and
   `wsl --unregister` instructions (single-distro rule). With a non-Debian distro
   installed, Branch 1 aborts with a Debian-only message.
@@ -314,8 +330,8 @@ non-zero if any item fails.
   PASS/FAIL, and the script exits non-zero on any FAIL.
 - Running either script again produces no errors and no duplicated state
   (including the Portainer container name and the `.zshrc` marker block).
-- `--upgrade` triggers a full package upgrade; without it, only the index
-  refresh runs.
+- A full base upgrade runs by default; `--no-upgrade` skips it (speed-first
+  rerun).
 
 ## 8. Risk Management
 

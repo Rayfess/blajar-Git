@@ -16,7 +16,8 @@ A one-command installer for a full Linux development environment on WSL2:
 
 - `wsl-setup.ps1` (Windows): preflight → decision tree → enables WSL features,
   installs Debian, writes `.wslconfig`, guides the native first launch, and
-  chains into provisioning via the automounted script path.
+  hands off via a printed guide - the provisioning script is copied into the
+  Linux filesystem and run from there (containment, Nov 20 decision).
 - `provision-wsl.sh` (Debian, 13 tasks): inventory → wsl.conf → apt → dev
   tools (curl/git/zsh/unzip/build-essential) → nvm + Node LTS → zsh stack
   (autosuggestions/completions/syntax-highlighting/AUTO_CD) → Docker CE →
@@ -63,6 +64,7 @@ Bugs found only by actually running the automation (or analyzing its output):
 | 4 | **sudo rejected the password** the user had just chosen (FR-12 paste) | Piped stdin into `wsl.exe chpasswd` is discarded — microsoft/WSL[#42094](https://github.com/microsoft/WSL/issues/42094), [#12523](https://github.com/microsoft/WSL/issues/12523) | Canonical in-VM pattern: `wsl -u root -- bash -c "echo 'user:pass' \| chpasswd"` (echo runs inside the VM; no Windows stdin) |
 | 5 | Second stdin attempt (temp file + `Get-Content \| wsl.exe`) **still** empty | Same #42094 class — wsl.exe stdin passthrough unreliable through PS pipes | Same fix as #4; plus **positive gate-time verification**: `sudo -S -k id -un` must echo the username before chaining, otherwise FAIL with reset instructions |
 | 6 | `permission denied ... docker.sock` at FR-12 | `id -nG "$USER"` reads the group **database** (already updated by usermod), not the **session's** effective groups | `run_docker` checks `id -nG` (session), falls back to `sg docker` |
+| 7 | `WSL_E_DISTRO_NOT_FOUND` in the installer AND the Windows Terminal Debian profile, while `wsl -d Debian` works | Stale distro name after unregister/reinstall cycles: the registry `DefaultDistribution` GUID (read by `Get-DefaultDistro`) and the cached WT profile pointed at an unregistered name | Branch 1 auto-heals: validates the default against registered distros, runs `wsl --set-default <first registered>`; user-side verified order: `wsl --shutdown` → `wsl --set-default Debian` → `wsl -l -v` → restart Windows Terminal |
 
 ## 5. Design Decision Ledger
 
@@ -71,13 +73,19 @@ Bugs found only by actually running the automation (or analyzing its output):
 | Debian-only, single-distro rule | Long-support target; multi-distro complexity rejected |
 | Native first launch over pwsh-created user | Reverted to the documented flow (learn.microsoft.com/windows/wsl) — credentials typed natively in Debian, never through PowerShell; the pwsh gate caused two stdin-delivery bugs |
 | Root stays password-locked | `wsl -u root` ignores Linux passwords → a root password provides no protection; the OOBE user + sudo is the real boundary |
+| Firefox = own NSS store (Windows import doesn't apply) | CA trusted in Windows covers Chrome/Edge only; Firefox needs manual rootCA import or the ImportEnterpriseRoots policy — documented in readme Verification/Troubleshooting |
 | nvm pinned `v0.40.3`, `nvm install --lts` | Replaces NodeSource; Node tracks current LTS without touching the script |
+| mkcert = project-wide local TLS authority (not Portainer-scoped) | DDEV itself generates SSL certs via mkcert (docs.ddev.com "Configuring Browsers") — DDEV is the primary consumer; Portainer consumes one generated cert (FR-16). Reusable pattern for future local services documented in readme. libnss3-tools = NSS store Linux-side only (Firefox/Chromium), NOT a WSL2→Windows bridge (mkcert repo: Firefox support "macOS and Linux only") |
 | zsh-completions default (pinned `0.34.0`) | fpath-before-compinit integration has near-zero startup cost; the documented cost applies to the oh-my-zsh mechanism (not used) |
 | `AUTO_CD`, no framework, syntax-highlighting last | User preference + plugin docs |
 | swap=1GB (owner-adjusted from doc-exact 4GB) | Storage-saving adjustment, declared in PRD |
 | TTY-gated colors (`-t 1`) | Piped/captured output (tests, logs) stays plain so assertions never break |
 | Skip-if-installed everywhere | Rerun-safe; partial failures resume without reinstalling |
 | Scheduled future-dated commits | Contribution-graph queue (18/19/20 Nov) — established user workflow |
+| Flag surface trimmed to 4 | YAGNI: `--shell`/`--no-portainer` removed (never used); kept `--no-upgrade`/`--skip-ca-import`/`--log`/`--pause` |
+| Manual handoff over auto-chain (containment) | Windows phase ends with a printed guide; the provisioning script is copied into the Linux filesystem and run from there — no cross-boundary execution (Nov 20 decision) |
+| Flag surface trimmed to 4 | YAGNI: `--shell`/`--no-portainer` removed (never used); kept `--no-upgrade`/`--skip-ca-import`/`--log`/`--pause` |
+| Persistent cert dir `$HOME/.local/share/portainer-tls` | `/tmp` bind-mounts broke after VM boot (Debian tmpfiles wipes `/tmp` → dockerd auto-created dirs → "not a directory"); certs now survive restarts |
 
 ## 6. Validation Status
 

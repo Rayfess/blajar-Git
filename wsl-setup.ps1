@@ -8,14 +8,16 @@ Run elevated:
     powershell -ExecutionPolicy Bypass -File wsl-setup.ps1
 
 Optional switches (forwarded to provision-wsl.sh in Branch 1):
-    -Upgrade              -> --upgrade               (apt upgrade, FR-07)
+    -NoUpgrade            -> --no-upgrade            (skip the default base upgrade, FR-07)
     -SkipCaImport         -> --skip-ca-import        (FR-15)
+    -Log <file>           -> --log <file>            (full transcript, forensics)
     -Pause <seconds>      -> --pause <seconds>       (FR-17, default 5)
 #>
 [CmdletBinding()]
 param(
-    [switch]$Upgrade,
+    [switch]$NoUpgrade,
     [switch]$SkipCaImport,
+    [string]$Log,
     [int]$Pause = 5
 )
 
@@ -38,13 +40,9 @@ $script:StageSw = $null
 function Write-Stage([string]$Name) {
     $script:StageIndex++
     $script:StageSw = [System.Diagnostics.Stopwatch]::StartNew()
-    $pct = [int](($script:StageIndex - 1) * 100 / $script:StageTotal)
-    $filled = [int](26 * ($script:StageIndex - 1) / $script:StageTotal)
-    $bar = ('#' * $filled) + ('-' * (26 - $filled))
     Write-Host ""
     Write-Host "==================================================================" -ForegroundColor DarkGray
     Write-Host ("[STAGE {0}/{1}] {2}" -f $script:StageIndex, $script:StageTotal, $Name) -ForegroundColor Cyan
-    Write-Host ("  progress [{0}] {1}% | started {2}" -f $bar, $pct, (Get-Date -Format 'HH:mm:ss')) -ForegroundColor DarkGray
     Write-Host "------------------------------------------------------------------" -ForegroundColor DarkGray
 }
 function Complete-Stage([string]$Note) {
@@ -174,7 +172,15 @@ if ($distroList.Count -gt 0) {
         exit 1
     }
     $distro = Get-DefaultDistro
-    if (-not $distro) { $distro = $distroList[0] }
+    if (-not $distro -or ($distroList -notcontains $distro)) {
+        # Stale default distro (verified real-run bug): the registry
+        # DefaultDistribution GUID can point to an unregistered distro after
+        # unregister/reinstall cycles - 'wsl -d <stale>' then fails with
+        # WSL_E_DISTRO_NOT_FOUND while the real distro works fine. Heal it.
+        Write-WarnLine "Default distribution '$distro' is stale/unregistered - healing: wsl --set-default <first registered distro>"
+        Invoke-Wsl "--set-default $($distroList[0])"
+        $distro = $distroList[0]
+    }
     if ($distro -notmatch 'Debian') {
         # Debian-only (PRD): abort instead of provisioning the wrong distro.
         Write-FailLine "This automation is Debian-only. Installed distro: '$distro'."
@@ -198,6 +204,7 @@ autoProxy=false
 
 [experimental]
 sparseVhd=true
+hostAddressLoopback=true
 "@
     $wslconfigPath = Join-Path $env:UserProfile '.wslconfig'
     $existing = $null
@@ -228,55 +235,71 @@ sparseVhd=true
 
     $linuxScript = Convert-To-LinuxPath (Join-Path $PSScriptRoot 'provision-wsl.sh')
     $flags = @()
-    if ($Upgrade) { $flags += '--upgrade' }
+    if ($NoUpgrade) { $flags += '--no-upgrade' }
     if ($SkipCaImport) { $flags += '--skip-ca-import' }
+    if ($Log) { $flags += @('--log', (Convert-To-LinuxPath $Log)) }
     if ($Pause -ne 5) { $flags += @('--pause', "$Pause") }
 
     Write-Host ""
-    Write-Info "Chaining into Linux provisioning. After ONE sudo password prompt it runs unattended."
+    Write-Info "Windows phase complete. The Linux phase runs inside Debian - containment: nothing executes across the boundary."
     # Default-user gate: a distro without a completed first launch runs as root.
     # The native, documented flow applies (learn.microsoft.com/windows/wsl:
     # "Once you have installed WSL, you will need to create a user account and
     # password for your newly installed Linux distribution") - the first launch
     # of the distro opens its own setup and asks for the UNIX username and
     # password. The automation does NOT create users or touch credentials
-    # non-interactively; it guides the user to the native flow and resumes
-    # automatically once it is done.
+    # non-interactively; it guides the user to the native flow.
     $defaultUser = (Invoke-Wsl "-d $distro -e id -un" | Clean-WslOutput | Select-Object -First 1)
+    $firstLaunchNote = ""
     if (-not $defaultUser -or $defaultUser -eq 'root') {
-        Write-WarnLine "Debian default user is root - the native first launch has not been completed yet."
+        $firstLaunchNote = "  1. Launch the distro:  wsl -d $distro   (or Start menu -> Debian)"
+        $firstLaunchNote2 = "     -> create your UNIX username and password when the distro asks (native setup)"
+    }
+    Write-Stage "Guide: continue inside Debian (manual handoff - containment)"
+    Write-Host ""
+    if ($firstLaunchNote) {
+        Write-Host $firstLaunchNote -ForegroundColor Yellow
+        Write-Host $firstLaunchNote2 -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "[FIRST LAUNCH REQUIRED]" -ForegroundColor Yellow
-        Write-Host "  This is the documented setup flow - credentials are typed natively"
-        Write-Host "  in Debian and never pass through PowerShell:"
-        Write-Host "  1. Launch the distro:  wsl -d $distro   (or Start menu -> Debian)"
-        Write-Host "  2. Create your UNIX username and password when the distro asks (native setup)."
-        Write-Host "  3. Exit the Debian shell (exit), then run this script again -"
-        Write-Host "     it will continue into provisioning automatically."
-        Complete-Stage "blocked: native first launch required (create your UNIX user)"
-        exit 1
     }
-    Write-Ok "Default WSL user: $defaultUser"
-    Write-Stage ("Chain: wsl -d {0} -e bash {1}" -f $distro, $linuxScript)
-    Invoke-Wsl "-d $distro -e bash $linuxScript $($flags -join ' ')"
-    if ($LASTEXITCODE -eq 0) {
-        Complete-Stage "Linux provisioning finished - RESULT: PASS above"
+    Write-Host "  2. Copy the provisioner into the Linux filesystem:" -ForegroundColor White
+    Write-Host "     cp $linuxScript ~/" -ForegroundColor Green
+    $flagStr = ($flags -join ' ')
+    if ($flagStr) {
+        Write-Host "  3. Run it (flags carried over from this run):" -ForegroundColor White
+        Write-Host "     bash ~/provision-wsl.sh $flagStr" -ForegroundColor Green
     } else {
-        Write-FailLine "Linux provisioning FAILED (exit $LASTEXITCODE) - read the [ABORT]/[FAIL] lines above, fix, then rerun."
-        Complete-Stage "provisioning failed - see error above"
+        Write-Host "  3. Run it:" -ForegroundColor White
+        Write-Host "     bash ~/provision-wsl.sh" -ForegroundColor Green
     }
-    exit $LASTEXITCODE
+    Write-Host "  4. After RESULT: PASS, optional cleanup:" -ForegroundColor White
+    Write-Host "     rm ~/provision-wsl.sh" -ForegroundColor Green
+    Write-Host ""
+    Write-Info "Everything from here runs inside Debian - credentials typed natively, no cross-boundary execution."
+    Complete-Stage "prepared - handoff to Debian is manual (containment)"
+    exit 0
 }
 elseif ($featureEnabled) {
     # ---- Branch 3: feature present, no distro -> install Debian directly --
     $script:StageTotal = 3
     Write-Stage "FR-02 Branch 3: WSL feature enabled, no distro installed"
     Write-Info "Debian-only automation (PRD): installing Debian, no distro picker."
-    Write-Info "Installing: wsl --install -d Debian --no-launch"
-    Invoke-Wsl '--install -d Debian --no-launch'
-    if ($LASTEXITCODE -ne 0) {
-        Write-WarnLine "--no-launch not supported here; running plain wsl --install -d Debian"
-        Invoke-Wsl '--install -d Debian'
+    # Distro download fallback (real-run WININET_E_CONNECTION_RESET): retry
+    # with backoff, then --web-download — bypasses the Store CDN (documented
+    # fix per learn.microsoft.com/windows/wsl/install).
+    $installed = $false
+    foreach ($mode in @('', '--web-download')) {
+        $wd = if ($mode) { " $mode" } else { '' }
+        Write-Info "Attempt: wsl --install -d Debian --no-launch$wd"
+        Invoke-Wsl "--install -d Debian --no-launch$wd"
+        if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+        Write-WarnLine "attempt failed (exit $LASTEXITCODE)$(if (-not $mode) { ' - next attempt: --web-download (bypasses Store CDN)' })"
+        Start-Sleep -Seconds 5
+    }
+    if (-not $installed) {
+        Write-FailLine "distro install failed after all attempts - check network/proxy/VPN, then rerun; or manually: wsl --install -d Debian --web-download"
+        Complete-Stage "blocked: distro download failed (connection reset after retries)"
+        exit 1
     }
     Complete-Stage "Debian installed - rerun to create your UNIX user and chain"
     Write-Host ""
@@ -293,10 +316,22 @@ else {
     Write-Info "Running: wsl --install -d Debian --no-launch - one command, two effects:"
     Write-Info "  1. enables Windows features (Microsoft-Windows-Subsystem-Linux + VirtualMachinePlatform) -> RESTART required, first-time only"
     Write-Info "  2. unpacks the Debian distro -> the distro itself never needs a restart"
-    Invoke-Wsl '--install -d Debian --no-launch'
-    if ($LASTEXITCODE -ne 0) {
-        Write-WarnLine "--no-launch not supported here; running plain wsl --install -d Debian"
-        Invoke-Wsl '--install -d Debian'
+    # Distro download fallback (real-run WININET_E_CONNECTION_RESET): retry
+    # with backoff, then --web-download — bypasses the Store CDN (documented
+    # fix per learn.microsoft.com/windows/wsl/install).
+    $installed = $false
+    foreach ($mode in @('', '--web-download')) {
+        $wd = if ($mode) { " $mode" } else { '' }
+        Write-Info "Attempt: wsl --install -d Debian --no-launch$wd"
+        Invoke-Wsl "--install -d Debian --no-launch$wd"
+        if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+        Write-WarnLine "attempt failed (exit $LASTEXITCODE)$(if (-not $mode) { ' - next attempt: --web-download (bypasses Store CDN)' })"
+        Start-Sleep -Seconds 5
+    }
+    if (-not $installed) {
+        Write-FailLine "distro install failed after all attempts - check network/proxy/VPN, then rerun; or manually: wsl --install -d Debian --web-download"
+        Complete-Stage "blocked: distro download failed (connection reset after retries)"
+        exit 1
     }
     Complete-Stage "WSL feature installed - restart required, then rerun"
     Write-Host ""

@@ -6,7 +6,7 @@
 # distro from /etc/os-release and aborts on anything else.
 #
 # Run inside WSL (or chained by wsl-setup.ps1):
-#     bash provision-wsl.sh [--no-upgrade] [--no-portainer] [--shell zsh|bash]
+#     bash provision-wsl.sh [--no-upgrade] [--skip-ca-import] [--log F] [--pause N]
 #                           [--skip-ca-import] [--log F] [--pause N]
 #                           [--pause N]
 #
@@ -20,16 +20,12 @@ USER="${USER:-$(id -un)}"
 
 # ---------------------------------------------------------------- flags ----
 UPGRADE=1
-SKIP_PORTAINER=0
-SHELL_CHOICE="zsh"
 SKIP_CA=0
 LOG_FILE=""
 PAUSE=5
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-upgrade)           UPGRADE=0 ;;
-        --no-portainer)         SKIP_PORTAINER=1 ;;
-        --shell)                SHELL_CHOICE="${2:?--shell needs zsh|bash}"; shift ;;
         --skip-ca-import)       SKIP_CA=1 ;;
         --log)                  LOG_FILE="${2:?--log needs a file path}"; shift ;;
         --pause)                PAUSE="${2:?--pause needs a value}"; shift ;;
@@ -37,10 +33,6 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
-if [[ "$SHELL_CHOICE" != "zsh" && "$SHELL_CHOICE" != "bash" ]]; then
-    echo "${C_FAIL}[ABORT] unsupported --shell: $SHELL_CHOICE (zsh|bash)${C_RESET}" >&2
-    exit 2
-fi
 
 # --------------------------------------------- root guard (best practice) --
 # Everything here must run as the normal WSL user: tool installs (bun, zsh
@@ -116,7 +108,6 @@ task_start() { # $1 FR id, $2 title, $3 description
     echo ""
     echo "${C_STAGE}==================================================================${C_RESET}"
     echo "${C_STAGE}[$CURRENT/$TOTAL] $1 - $2${C_RESET}"
-    echo "${C_BAR}  progress [$(progress_bar $(( CURRENT - 1 )))] $(( (CURRENT - 1) * 100 / TOTAL ))% | started $(date '+%H:%M:%S')${C_RESET}"
     echo "${C_STAGE}------------------------------------------------------------------${C_RESET}"
     echo "$3"
 }
@@ -150,12 +141,6 @@ keep_sudo_alive &
 SUDO_KEEPALIVE_PID=$!
 
 # ---------------------- package manager (Debian-only: apt) ------------------
-pm_update()    { sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq; }
-pm_upgrade()   { sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq; }
-pm_installed() { dpkg -s "$1" >/dev/null 2>&1; }
-pm_install()   { sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"; }
-pm_remove()    { sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq "$@"; }
-
 # ============================================================ FR-05 ========
 task_start "FR-05" "Inventory & preflight" \
     "Detect distro/systemd; report what is already installed. Nothing is reinstalled."
@@ -280,10 +265,10 @@ task_end
 # ============================================================ FR-07 ========
 task_start "FR-07" "Package index + base upgrade" \
     "apt-get update every run; full base upgrade by default (--no-upgrade skips it - speed-first rerun)."
-pm_update
+sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq
 ok "package index refreshed (apt)"
 if [[ "$UPGRADE" == "1" ]]; then
-    pm_upgrade
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
     ok "full base upgrade complete (security currency)"
 else
     skip "full base upgrade skipped (--no-upgrade)"
@@ -296,10 +281,10 @@ task_start "FR-08" "Development tools" \
 BASE_PKGS=(curl git zsh ca-certificates unzip xz-utils build-essential)   # unzip: bun installer; xz-utils: nvm node tarballs
 MISSING_PKGS=()
 for p in "${BASE_PKGS[@]}"; do
-    if ! pm_installed "$p"; then MISSING_PKGS+=("$p"); fi
+    if ! dpkg -s "$p" >/dev/null 2>&1; then MISSING_PKGS+=("$p"); fi
 done
 if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
-    pm_install "${MISSING_PKGS[@]}"
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${MISSING_PKGS[@]}"
     chg "installed: ${MISSING_PKGS[*]}"
 else
     skip "base packages all present"
@@ -331,8 +316,7 @@ task_end
 
 # ============================================================ FR-09 ========
 task_start "FR-09" "Shell setup (zsh)" \
-    "No framework by policy. Clone autosuggestions + completions + syntax-highlighting (pinned tags), managed block in ~/.zshrc (nvm sourced, AUTO_CD on, syntax-highlighting last). --shell bash skips this whole stage."
-if [[ "$SHELL_CHOICE" != "bash" ]]; then
+    "No framework by policy. Clone autosuggestions + completions + syntax-highlighting (pinned tags), managed block in ~/.zshrc (nvm sourced, AUTO_CD on, syntax-highlighting last)."
 ZPLUG="$HOME/.zsh/plugins"
 mkdir -p "$ZPLUG"
 clone_plugin() { # url, ref ("" = latest), dir
@@ -390,7 +374,6 @@ TIMEFORMAT='%3R'
 STARTUP_S=$( { time zsh -i -c exit >/dev/null 2>&1; } 2>&1 || true )
 STARTUP_MS=$(awk -v s="$STARTUP_S" 'BEGIN{printf "%d", s*1000}')
 ok "interactive zsh startup: ${STARTUP_MS} ms (soft target < 150 ms; first run builds the completion cache)"
-fi
 task_end
 
 # ============================================================ FR-10 ========
@@ -398,8 +381,8 @@ task_start "FR-10" "Cleanup conflicting providers" \
     "Official Docker docs (verbatim): run the removal loop unconditionally; apt tolerates absent packages ('not installed, so not removed')."
 CONFLICTS=(docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc)
 for p in "${CONFLICTS[@]}"; do
-    if pm_installed "$p"; then
-        pm_remove "$p"
+    if dpkg -s "$p" >/dev/null 2>&1; then
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq "$p"
         chg "removed conflicting package: $p"
     else
         san "$p: absent - nothing to remove (docs loop ran regardless)"
@@ -428,8 +411,8 @@ Architectures: $(dpkg --print-architecture)
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
     chg "added apt source /etc/apt/sources.list.d/docker.sources ($ID_LC / $VERSION_CODENAME)"
-    pm_update
-    pm_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     chg "installed Docker CE + buildx + compose plugin (apt)"
 fi
 if id -nG "$USER" | grep -qw docker; then
@@ -491,8 +474,8 @@ task_end
 task_start "FR-14" "mkcert" \
     "Local CA for *.ddev.site HTTPS; distro NSS tools (libnss3-tools / nss-tools); mkcert -install."
 NSS_PKG="libnss3-tools"
-if ! pm_installed "$NSS_PKG"; then
-    pm_install "$NSS_PKG"
+if ! dpkg -s "$NSS_PKG" >/dev/null 2>&1; then
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$NSS_PKG"
     chg "installed $NSS_PKG"
 fi
 if command -v mkcert >/dev/null 2>&1; then
@@ -550,10 +533,33 @@ task_end
 
 # ============================================================ FR-16 ========
 task_start "FR-16" "Portainer" \
-    "GUI for Docker on https://127.0.0.1:9443 (container name: portainer, restart=always). --no-portainer skips this stage."
-if [[ "$SKIP_PORTAINER" == "1" ]]; then
-    skip "portainer skipped (--no-portainer)"
-elif portainer_exists; then
+    "GUI for Docker on https://127.0.0.1:9443 (container name: portainer, restart=always). Serves a mkcert-signed TLS cert for localhost/127.0.0.1 (CA trusted on Windows via FR-15) - no browser warning. HTTP fallback on port 9000. Certs live in a persistent dir - /tmp is wiped on VM boot."
+TLS_DIR="$HOME/.local/share/portainer-tls"   # persistent ext4 - /tmp is wiped on VM boot (Debian tmpfiles.d)
+mkdir -p "$TLS_DIR" && chmod 700 "$TLS_DIR" 2>/dev/null || true   # chmod may no-op on Windows ACL emulation (Git Bash)
+CERT_OK=0
+if command -v mkcert >/dev/null 2>&1 && [[ -f "$(mkcert -CAROOT)/rootCA.pem" ]]; then
+    mkcert -cert-file "$TLS_DIR/portainer.crt" -key-file "$TLS_DIR/portainer.key" localhost 127.0.0.1
+    chmod 600 "$TLS_DIR/portainer.key"
+    CERT_OK=1
+    chg "generated mkcert-signed TLS cert for localhost/127.0.0.1 in $TLS_DIR (persistent; CA trusted on Windows via FR-15)"
+fi
+# Post-set verification: permissions must be 700 dir / 600 key (provable on
+# real Debian; Git Bash emulates chmod, so the sim proves the flow, not ACLs)
+if [[ "$CERT_OK" == "1" ]]; then
+    DIR_PERM="$(stat -c '%a' "$TLS_DIR" 2>/dev/null || echo '?')"
+    KEY_PERM="$(stat -c '%a' "$TLS_DIR/portainer.key" 2>/dev/null || echo '?')"
+    if [[ "$DIR_PERM" == "700" && "$KEY_PERM" == "600" ]]; then
+        ok "cert permissions verified: dir $DIR_PERM, key $KEY_PERM"
+    else
+        warn "cert permissions unexpected: dir $DIR_PERM, key $KEY_PERM (expected 700/600)"
+    fi
+fi
+rm -rf /tmp/portainer.crt /tmp/portainer.key   # cleanup /tmp leftovers (auto-created dirs from the pre-fix bug)
+CERT_MOUNTS=""
+if [[ "$CERT_OK" == "1" ]]; then
+    CERT_MOUNTS="-v $TLS_DIR/portainer.crt:/data/tls/portainer.crt -v $TLS_DIR/portainer.key:/data/tls/portainer.key"
+fi
+if portainer_exists; then
     PSTATE="$(portainer_state)"
     if [[ "$PSTATE" == "running" ]]; then
         ok "portainer container already running"
@@ -561,15 +567,28 @@ elif portainer_exists; then
         run_docker start portainer >/dev/null
         chg "portainer container started"
     fi
+    if [[ "$CERT_OK" == "1" ]] && ! run_docker inspect portainer --format '{{json .Mounts}}' 2>/dev/null | grep -q portainer.crt; then
+        warn "existing portainer container lacks the mkcert TLS cert - recreating it for warning-free HTTPS"
+        run_docker rm -f portainer >/dev/null
+        run_docker volume create portainer_data >/dev/null
+        run_docker run -d -p 127.0.0.1:9443:9443 --name portainer --restart=always \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v portainer_data:/data \
+            $CERT_MOUNTS \
+            portainer/portainer-ce:latest >/dev/null
+        chg "portainer recreated (loopback-only: 127.0.0.1:9443, mkcert TLS mounted)"
+    fi
     if run_docker port portainer 2>/dev/null | grep -q '0.0.0.0:9443'; then
-        warn "existing portainer container is LAN-exposed (0.0.0.0:9443) - recreate it to get loopback-only binding: docker rm -f portainer, then rerun"
+        warn "existing portainer container is LAN-exposed (0.0.0.0:9443) - recreate it for loopback-only binding: docker rm -f portainer, then rerun"
     fi
 else
     run_docker volume create portainer_data >/dev/null
     run_docker run -d -p 127.0.0.1:9443:9443 --name portainer --restart=always \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        -v portainer_data:/data portainer/portainer-ce:latest >/dev/null
-    chg "portainer container created (loopback-only: 127.0.0.1:9443, not reachable from LAN)"
+        -v portainer_data:/data \
+        $CERT_MOUNTS \
+        portainer/portainer-ce:latest >/dev/null
+    chg "portainer container created (loopback-only: 127.0.0.1:9443, not reachable from LAN)${CERT_OK:+ - mkcert TLS mounted}"
 fi
 task_end
 
@@ -592,16 +611,39 @@ if [[ -n "$DDEV_V" ]] && run_docker info >/dev/null 2>&1; then
 else
     status "ddev" 1 "not installed or docker unreachable"
 fi
-if [[ "$SKIP_PORTAINER" == "1" ]]; then
-    echo "  ${C_SKIP}[SKIP]${C_RESET} portainer: skipped (--no-portainer)"
-else
-    PSTATE=$(portainer_state || true)
-    if [[ "$PSTATE" == "running" ]] && \
-       { curl -k -fsS https://127.0.0.1:9443 >/dev/null 2>&1 || curl -k -fsS https://localhost:9443 >/dev/null 2>&1; }; then
-        status "portainer" 0 "running; https://127.0.0.1:9443 responds (loopback-only)"
+# Served-cert check: the portainer listener must serve the mkcert-signed cert,
+# NOT Portainer's own self-signed one (real-run bug class). Runs only on a
+# real machine (interop present); the sandbox has no listener, so it skips.
+if [[ -x /mnt/c/Windows/System32/wsl.exe ]]; then
+    SERVED_ISSUER="$(timeout 5 openssl s_client -connect 127.0.0.1:9443 </dev/null 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null || true)"
+    if [[ "$SERVED_ISSUER" == *"mkcert"* ]]; then
+        status "portainer serving mkcert-signed TLS" 0 "$SERVED_ISSUER"
     else
-        status "portainer" 1 "state=${PSTATE:-unknown}"
+        status "portainer serving mkcert-signed TLS" 1 "issuer: ${SERVED_ISSUER:-none} (self-signed? recreate FR-16)"
     fi
+else
+    skip "portainer serving mkcert-signed TLS: no interop (sandbox)"
+fi
+if [[ "$SKIP_CA" == "1" ]]; then
+    echo "  ${C_SKIP}[SKIP]${C_RESET} mkcert CA trusted on Windows: skipped (--skip-ca-import)"
+else
+    CERTUTIL="/mnt/c/Windows/System32/certutil.exe"
+    CA_TRUSTED=0; CA_DETAIL="certutil.exe not reachable (no interop)"
+    if [[ -x "$CERTUTIL" ]]; then
+        if "$CERTUTIL" -user -store Root 2>/dev/null | grep -qi 'mkcert'; then
+            CA_TRUSTED=1; CA_DETAIL="found in current-user Trusted Root"
+        else
+            CA_DETAIL="NOT found in Windows store - browser will warn on https://127.0.0.1:9443 and *.ddev.site"
+        fi
+    fi
+    status "mkcert CA trusted on Windows" "$CA_TRUSTED" "$CA_DETAIL"
+fi
+PSTATE=$(portainer_state || true)
+if [[ "$PSTATE" == "running" ]] && \
+   { curl -k -fsS https://127.0.0.1:9443 >/dev/null 2>&1 || curl -k -fsS https://localhost:9443 >/dev/null 2>&1; }; then
+    status "portainer" 0 "running; https://127.0.0.1:9443 responds (loopback-only)"
+else
+    status "portainer" 1 "state=${PSTATE:-unknown}"
 fi
 if [[ "${WSL_SETUP_CAP_WARNING:-}" == "1" ]]; then
     status "windows capability (Mirrored/systemd)" 1 \
@@ -617,4 +659,9 @@ if [[ "$FAIL" == "0" ]]; then
 else
     echo "${C_FAIL}RESULT: FAIL - see [FAIL] items above${C_RESET}"
 fi
+echo ""
+echo "${C_STAGE}[RESTART]${C_RESET} Applying configuration - restarting WSL now."
+echo "${C_STAGE}         This terminal will close as the VM restarts. Reopen with 'wsl -d Debian'.${C_RESET}"
+sleep 2
+/mnt/c/Windows/System32/wsl.exe --shutdown 2>/dev/null || true
 exit "$FAIL"

@@ -15,6 +15,13 @@
     </li>
     <li>
       <a href="#wsl2--ddev-setup-automation">WSL2 + DDEV Setup Automation</a>
+      <ul>
+        <li><a href="#how-it-works">How It Works</a></li>
+        <li><a href="#verification">Verification</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#project-files">Project Files</a></li>
+        <li><a href="#uninstall">Uninstall</a></li>
+      </ul>
     </li>
     <li>
         <a href="#prerequisites">Prerequisites</a>
@@ -40,7 +47,8 @@ This repository ships a one-command installer for a full Linux development
 environment on WSL2 (Debian-only) with Docker CE, DDEV, Portainer, mkcert HTTPS
 for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
 [wslddev.md](wslddev.md). Requirements and acceptance criteria live in
-[wsl-ddev-setup-prd.md](wsl-ddev-setup-prd.md).
+[wsl-ddev-setup-prd.md](wsl-ddev-setup-prd.md); project history, decisions,
+and the real-run bug ledger in [MILESTONE.md](MILESTONE.md).
 
 ### Quick Start
 
@@ -55,30 +63,58 @@ for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
 3. The script routes itself (decision tree):
    - WSL feature missing → installs it → **restart Windows** → run again
    - Feature present, no distro → installs **Debian** → run again →
-     choose your UNIX username/password **in PowerShell** (no manual Debian
-     launch) → provisioning chains automatically
-   - Debian installed → writes `.wslconfig` → chains Linux provisioning
-     automatically
+     first launch in the Debian terminal (native user setup) → copy & run
+     the provisioner from `~` (commands printed by the installer)
+   - Debian installed → writes `.wslconfig` → prints the handoff guide
+     (containment: the Linux phase runs inside Debian)
 
 4. Enter the **sudo password once**; provisioning runs unattended
    (13 tasks, 5-second pause each) and ends with a PASS/FAIL status report.
+
+### How It Works
+
+```text
+[PowerShell - Admin]  wsl-setup.ps1
+  │
+  ├─ A. WSL features missing ──► wsl --install -d Debian
+  │      ⛔ STOP: restart Windows (first-time feature activation) → rerun
+  │
+  ├─ B. Features ok, no distro ──► wsl --install -d Debian
+  │      ⛔ STOP: first launch in Debian (create your UNIX user) → rerun
+  │
+  └─ C. Debian ready ──► write .wslconfig ──► wsl --shutdown
+         ⛔ HANDOFF: print the exact Debian-phase commands → exit
+
+═══════ containment boundary — everything below runs INSIDE Debian ═══════
+[Debian terminal]  (user follows the printed guide)
+  1. first launch (native user setup)            ← only if path C said so
+  2. cp /mnt/d/.../provision-wsl.sh ~/
+  3. bash ~/provision-wsl.sh --upgrade           ← flags carried over
+       └─ 13 tasks: inventory → wsl.conf → apt → tools → zsh → Docker
+          → DDEV → mkcert → CA → Portainer → PASS/FAIL report
+  4. one sudo password prompt, then unattended
+```
+
+Windows automation runs in Windows; Linux automation runs in Linux. The
+installer never executes anything across the boundary — it only prepares and
+prints the exact commands.
 
 ### Optional Flags
 
 | Flag | Effect |
 |------|--------|
-| `-Upgrade` | full `apt upgrade` during provisioning |
+| `-NoUpgrade` | skip the default full base upgrade (speed-first rerun) |
 | `-SkipCaImport` | skip importing the mkcert CA into Windows |
+| `-Log <file>` | tee the full provisioning transcript to a file (forensics) |
 | `-Pause <seconds>` | change the per-task pause (default 5) |
 
 ### Notes
 
 - **Debian-only** and **single-distro**: extra or non-Debian distros abort with
   fix-it instructions (`wsl --unregister <name>`).
-- Manual steps by design: the Windows restart (first-time feature activation)
-  and uninstalling Docker Desktop if present (warned by the script). The UNIX
-  user is created automatically — you only choose its username and password
-  when prompted in PowerShell.
+- Manual steps by design: the Windows restart (first-time feature activation),
+  the native Debian first launch (create your UNIX user there), and
+  uninstalling Docker Desktop if present (warned by the script).
 - Portainer is bound to loopback only: `https://127.0.0.1:9443`.
 - Every task prints what it changes; nothing is installed twice (reruns are safe).
 - After PASS: `cd ~/projects/<project> && ddev start`, Portainer at
@@ -87,6 +123,179 @@ for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
 - The Windows restart is needed only once, for enabling the WSL features —
   installing a distro never requires one. (`wsl --shutdown` after writing
   `.wslconfig` is not a reboot; it just restarts the WSL VM to apply the config.)
+
+### Verification
+
+`RESULT: PASS` at the end of provisioning is the installer's own success
+signal. Deeper, read-only checks — run inside Debian:
+
+```bash
+ddev -v                          # DDEV version
+docker ps                        # daemon reachable, containers listed
+ls ~/.zsh/plugins                # autosuggestions, completions, syntax-highlighting
+grep -c zcode-managed ~/.zshrc   # managed block present (1 = ok)
+```
+
+… and from Windows (Portainer reachable — no TLS warning: the cert on 9443 is
+mkcert-signed and the CA is trusted on Windows; config in place):
+
+```powershell
+Get-Content $env:UserProfile\.wslconfig
+curl.exe -fsS https://127.0.0.1:9443      # no -k needed - cert is trusted
+```
+
+Default distro sanity (after unregister/reinstall cycles):
+
+```powershell
+wsl -l -v                     # exact registered names + states
+wsl --shutdown                # reset WSL state
+wsl --set-default Debian      # fix stale default (verified community order)
+```
+
+CA trust (mkcert ↔ Windows browser) — the mkcert-signed cert only helps if
+the CA is in the Windows store, and the served cert is the mkcert-signed one
+(the provisioning report now checks this). Verify both ends:
+
+```bash
+# inside Debian: which cert is served, and signed by whom?
+docker inspect portainer --format '{{json .Mounts}}'
+openssl s_client -connect 127.0.0.1:9443 </dev/null 2>/dev/null |
+  openssl x509 -noout -issuer -ext subjectAltName
+```
+
+```powershell
+certutil -user -store Root | findstr /i mkcert   # CA in Windows store?
+```
+
+Then the padlock test: `https://127.0.0.1:9443` and
+`https://<project>.ddev.site` — no warning means the Linux-made CA is trusted
+by the Windows browser.
+
+Default distro sanity (after unregister/reinstall cycles — verified cause of
+`WSL_E_DISTRO_NOT_FOUND`):
+
+```powershell
+wsl -l -v                     # exact registered names + states
+wsl --shutdown                # reset WSL state
+wsl --set-default Debian      # fix stale default (verified community order)
+```
+
+Then restart Windows Terminal — its WSL profiles regenerate from the current
+registrations (a stale cached profile gives the same DISTRO_NOT_FOUND).
+
+Any check that fails maps to a stage in [How It Works](#how-it-works) — rerun
+the installer for that stage (everything already done is skipped).
+
+Browser note: **Chrome/Edge read the Windows store** — with the CA already
+verified there, no manual import is needed (restart the browser if it still
+warns). **Firefox uses its own NSS store** — see the next section.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `[ABORT] Running as root is not supported` | First launch not completed — follow the printed first-launch steps, then rerun the installer |
+| `[FAIL] password verification failed - sudo did not accept it` | Rerun the installer — it offers an in-place password reset for the existing user |
+| `permission denied ... docker.sock` at FR-12 | Fixed in the current script — pull the latest `provision-wsl.sh` and rerun |
+| Portainer `not a directory` mount error after a WSL restart | Fixed in the current script (certs moved out of `/tmp` to a persistent dir) — rerun the installer; it auto-recreates the container with the certs |
+| `WININET_E_CONNECTION_RESET` when downloading the Debian distro | Transient CDN reset — the installer retries, then falls back to `--web-download` (bypasses the Store CDN); also check VPN/proxy. Rerun the installer |
+| Browser warning on `https://127.0.0.1:9443` | Diagnose first: `openssl s_client -connect 127.0.0.1:9443 ... -noout -issuer` (see Verification) — issuer = Portainer self-signed → rerun the installer (auto-recreates with the mkcert cert); issuer = your mkcert CA → restart Chrome/Edge (store refresh) |
+| CA missing from Windows store (`certutil -user -store Root` shows no mkcert) | Rerun the installer — FR-15 imports it (idempotent) |
+| `WSL_E_DISTRO_NOT_FOUND` in the installer or the Windows Terminal Debian profile | Stale default distro / stale WT profile after unregister+reinstall — verified fix order: `wsl --shutdown` → `wsl --set-default Debian` → `wsl -l -v` → restart Windows Terminal (profiles regenerate). The fixed installer also auto-heals a stale default. Note: `wsl --unregister <name>` deletes that distro's filesystem |
+| Firefox still warns | Firefox uses its own NSS store — the Windows import doesn't apply; use Chrome/Edge or import rootCA.pem into Firefox |
+| Portainer missing | Installed unless `-NoPortainer`; start manually: `docker start portainer` |
+| A task FAILs mid-run | Rerun the installer (idempotent — completed stages are skipped) and paste the output |
+| Terminal closes at the end of provisioning | By design — the script restarts WSL to apply configuration; reopen with `wsl -d Debian` |
+
+Full real-run bug ledger: [MILESTONE.md](MILESTONE.md) §4.
+
+### mkcert — project-wide local TLS authority
+
+Flow reference: Randy Fay's [DDEV on WSL2 From Scratch](https://www.youtube.com/watch?v=g8cONkiLOdM)
+(the video this project's research started from).
+
+### mkcert — project-wide local TLS authority
+
+[Upstream README](https://github.com/FiloSottile/mkcert) (59.9k stars) defines
+mkcert as *"a simple zero-config tool to make locally trusted development
+certificates with any names you'd like"*. It is **not tied to Portainer** — it
+is the project-wide local TLS authority:
+
+- **DDEV** — the primary consumer in this project: DDEV generates its
+  per-project SSL certificates via mkcert, so `*.ddev.site` is trusted
+  ([docs.ddev.com — Configuring Browsers](https://docs.ddev.com/en/stable/users/install/configuring-browsers)).
+  Installed and registered in FR-14, CA trusted on Windows in FR-15.
+- **Portainer** — one consumer of a generated certificate (FR-16): the
+  self-signed warning on `https://127.0.0.1:9443` is fixed by mounting a
+  mkcert-signed cert for `localhost 127.0.0.1`.
+- **Any future local service** — follow the same pattern.
+
+#### Reusable pattern — trusted TLS for any local service
+
+Prerequisites: FR-14 (mkcert installed) and FR-15 (CA trusted on Windows)
+already ran — both happen before any service stage.
+
+```bash
+# 1. Issue a cert for the service's loopback names (CA = the trusted one)
+mkcert -cert-file <service>.crt -key-file <service>.key localhost 127.0.0.1
+chmod 600 <service>.key
+
+# 2. Configure the service to use the cert + key
+#    (each service has its own mechanism — see its documentation)
+
+# 3. Restart the service so it reads the cert
+
+# 4. Verify from Windows: no warning, because the CA is already trusted
+curl.exe -k https://127.0.0.1:<port>   # -k optional once CA is trusted
+```
+
+Constraints: loopback names only (`localhost`, `127.0.0.1`) — for anything
+publicly reachable use a real CA instead. Node.js does not read the system
+store: set `NODE_EXTRA_CA_CERTS` to the `rootCA.pem` path if a Node dev server
+needs the cert. mkcert is for development machines only, per upstream.
+
+### Firefox — import CA manually (verified steps)
+
+Firefox uses its own NSS store — the Windows `certutil` import doesn't apply
+(Chrome/Edge read the Windows store, so they need no manual import). Official
+steps ([support.mozilla.org](https://support.mozilla.org/en-US/kb/using-certificate-manager-firefox)):
+
+1. Get the CA file out of Debian (one command, inside Debian):
+
+   ```bash
+   cp "$(mkcert -CAROOT)/rootCA.pem" /mnt/c/Users/<windows-user>/Desktop/mkcert-rootCA.pem
+   ```
+
+2. Firefox → **Settings → Privacy & Security → Certificates → View
+   Certificates → Authorities → Import**
+3. Select `mkcert-rootCA.pem` from the Desktop, check **"Trust this CA to
+   identify websites"**, OK
+4. Restart Firefox, then the padlock test: `https://127.0.0.1:9443` — trusted
+
+Alternative: set the Firefox enterprise policy `ImportEnterpriseRoots = true`
+to make Firefox trust the OS store (no manual import), per Mozilla's
+documentation.
+
+### Project Files
+
+| File | Role |
+|------|------|
+| `wsl-setup.ps1` | Windows phase: preflight, features, Debian install, `.wslconfig`, handoff guide |
+| `provision-wsl.sh` | Debian phase: 13 provisioning tasks + PASS/FAIL report |
+| `wsl-ddev-setup-prd.md` | Requirements contract — FR-01..FR-18, policies, risks |
+| `MILESTONE.md` | Context ledger — timeline, real-run bug fixes, design decisions |
+| `wslddev.md` | The original manual procedure (source of the flow) |
+
+### Uninstall
+
+Everything lives inside the Debian distro — removing the distro removes it all:
+
+```powershell
+wsl --unregister Debian
+```
+
+Then delete `%UserProfile%\.wslconfig` if you want the config gone too.
+Nothing was installed on the Windows side beyond WSL itself.
 
 ### Sources
 

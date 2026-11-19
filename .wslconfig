@@ -9,3 +9,4 @@ autoProxy=false
 
 [experimental]
 sparseVhd=true
+hostAddressLoopback=true
