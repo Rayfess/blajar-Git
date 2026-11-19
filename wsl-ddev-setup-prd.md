@@ -137,7 +137,8 @@ active, and a list of all existing containers.
   stdin) - credentials are never hardcoded in this repository. The root
   account stays password-locked: WSL's `-u root` ignores Linux passwords, so
   a root password would provide no protection while a public default would be
-  a known credential.
+  a known credential. The password is additionally verified at gate time with
+  `sudo -S id -un` before provisioning chains.
 - PowerShell 5.1 native-stderr quirk (learned from the first real run):
   every wsl.exe call merges stderr into stdout via `cmd /c ... 2>&1` and runs
   with ErrorActionPreference 'Continue', so native warnings (e.g. the
@@ -165,7 +166,8 @@ below the documented `memory=10GB`). Warns if Docker Desktop is installed
   still defaults to root (first launch not completed), the script prompts for
   a UNIX username and password in PowerShell, creates the user
   non-interactively (useradd -m -G sudo via `-u root`, password set through
-  chpasswd stdin), sets it as the default user (`--manage --set-default-user`,
+  chpasswd stdin, positively verified via `sudo -S id -un` at gate time), sets
+  it as the default user (`--manage --set-default-user`,
   registry fallback), terminates the distro so the new default applies, and
   chains as that user - no manual Debian launch.
 - Branch 2 - distro absent, WSL feature absent: run `wsl --install -d Debian`

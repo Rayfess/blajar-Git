@@ -258,22 +258,40 @@ sparseVhd=true
             $plain2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b2)
             [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b1)
             [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b2)
-        } until ($plain.Length -ge 6 -and $plain -ceq $plain2)
+        if ($plain.Length -lt 6 -or $plain -cne $plain2 -or $plain -notmatch '^[\x20-\x7E]+$') {
+            Write-WarnLine "password invalid: min 6 chars, both entries must match, printable ASCII only - try again."
+        }
+    } until ($plain.Length -ge 6 -and $plain -ceq $plain2 -and $plain -match '^[\x20-\x7E]+$')
         Write-Info "Creating UNIX user '$unixUser' (home, sudo group, bash)..."
+        # (password must stay printable ASCII - it crosses stdin via ASCII encoding)
         Invoke-Wsl "-d $distro -u root -- useradd -m -G sudo -s /bin/bash $unixUser"
         if ($LASTEXITCODE -ne 0) {
             Write-FailLine "useradd failed (exit $LASTEXITCODE) - username may already exist."
             Complete-Stage "blocked: user creation failed"
             exit 1
         }
+        # Password delivery (real-run bug fixed): piping into `cmd /c "wsl ...
+        # chpasswd"` lost stdin, so chpasswd exited 0 WITHOUT setting anything
+        # and sudo later rejected every attempt. Write the credential to a temp
+        # file (UTF-8, no BOM) and pipe it straight into wsl.exe - no cmd layer.
+        $credFile = Join-Path $env:TEMP ('wsl-cred-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        [IO.File]::WriteAllText($credFile, "$unixUser`:$plain`n")
         $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-        "$unixUser`:$plain" | & cmd.exe /c "wsl.exe -d $distro -u root -- chpasswd 2>&1"
+        Get-Content $credFile | & wsl.exe -d $distro -u root -- chpasswd 2>&1
         $ErrorActionPreference = $eap
-        if ($LASTEXITCODE -ne 0) {
-            Write-FailLine "chpasswd failed (exit $LASTEXITCODE)."
-            Complete-Stage "blocked: password setup failed"
+        Remove-Item $credFile -ErrorAction SilentlyContinue
+        # Positive verification: sudo -S must accept the password and echo the
+        # user. This is the safety net that would have caught the erlog bug.
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        $sudoCheck = ("$plain" | & wsl.exe -d $distro -e sudo -S -k id -un 2>&1 | Clean-WslOutput | Select-Object -Last 1)
+        $ErrorActionPreference = $eap
+        if ($sudoCheck -ne $unixUser) {
+            Write-FailLine "password verification failed - sudo did not accept it (got: '$sudoCheck')."
+            Write-Info "reset manually if needed: wsl -d $distro -u root -- bash -c `"passwd $unixUser`""
+            Complete-Stage "blocked: password verification failed"
             exit 1
         }
+        Write-Ok "password verified - sudo accepts it."
         Write-Ok "UNIX user '$unixUser' created with your password."
         Invoke-Wsl "--manage $distro --set-default-user $unixUser"
         if ($LASTEXITCODE -ne 0) {
