@@ -86,6 +86,23 @@ for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
   installing a distro never requires one. (`wsl --shutdown` after writing
   `.wslconfig` is not a reboot; it just restarts the WSL VM to apply the config.)
 
+### Sources
+
+| Tools | Official source | Method |
+|-------|-----------------|--------|
+| WSL + Debian distro | learn.microsoft.com/windows/wsl | `wsl --install -d Debian` (built into Windows) |
+| Docker CE | docs.docker.com/engine/install/debian | deb822 apt repo keyed by the detected codename |
+| DDEV | docs.ddev.com | `ddev.com/install.sh` (download-to-file) |
+| Node.js + npm | github.com/nvm-sh/nvm | nvm pinned (`v0.40.3`), then `nvm install --lts` |
+| bun | bun.sh/docs/installation | `bun.sh/install` (download-to-file; needs unzip) |
+| mkcert | github.com/FiloSottile/mkcert | binary release pinned (`v1.4.4`) + libnss3-tools |
+| Portainer CE | docs.portainer.io | image `portainer-ce:latest`, loopback `127.0.0.1:9443` |
+| zsh plugins | github.com/zsh-users | autosuggestions `0.7.1` + syntax-highlighting `0.8.0` (pinned tags) |
+
+Version policy: DDEV, Docker CE, and Portainer track latest stable; mkcert,
+nvm, and the zsh plugin tags are pinned (supply-chain control); Node.js
+follows the current LTS via nvm.
+
 ## Appendix
 
 ### Semantic Commit Messages
