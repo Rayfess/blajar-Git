@@ -127,9 +127,10 @@ active, and a list of all existing containers.
   instead; every gate is resumable by rerunning wsl-setup.ps1.
 - No project is created; the run ends at the status report.
 - Version policy, declared deliberately: DDEV, Docker CE, and the Portainer
-  image track latest stable; the mkcert binary and the zsh plugin tags are
-  pinned (supply-chain control). Remote installer scripts are downloaded to a
-  file first (inspectable) instead of piped straight into a shell.
+  image track latest stable; the mkcert binary, the nvm release, and the zsh
+  plugin tags are pinned (supply-chain control); Node.js itself tracks the
+  current LTS via `nvm install --lts`. Remote installer scripts are downloaded
+  to a file first (inspectable) instead of piped straight into a shell.
 - PowerShell 5.1 native-stderr quirk (learned from the first real run):
   every wsl.exe call merges stderr into stdout via `cmd /c ... 2>&1` and runs
   with ErrorActionPreference 'Continue', so native warnings (e.g. the
@@ -197,9 +198,10 @@ only with the `--upgrade` flag.
 
 ### FR-08 - Development Tools
 Installs only items missing from the tool list defined at the top of the script.
-Default list: curl, git, zsh, unzip (required by bun's installer),
-build-essential, Node.js LTS with npm (NodeSource deb setup script), bun (via
-its official installer). Prints versions after installation.
+Default list: curl, git, zsh, unzip (required by bun's installer), xz-utils
+(required by nvm's node tarballs), build-essential, Node.js LTS with npm via
+nvm (installer downloaded to file; `nvm install --lts`), bun (via its official
+installer). Prints versions after installation.
 
 ### FR-09 - Shell Setup (zsh)
 Clones `zsh-users/zsh-autosuggestions` and `zsh-users/zsh-syntax-highlighting`
@@ -207,7 +209,8 @@ Clones `zsh-users/zsh-autosuggestions` and `zsh-users/zsh-syntax-highlighting`
 (skip if present), and appends a marker-delimited block to `~/.zshrc` that
 sources them directly — `zsh-syntax-highlighting` sourced last per its
 documentation, with a cached `compinit` (its skipped security audit is a
-documented tradeoff). Sets zsh as the default shell (`sudo chsh`). With
+documented tradeoff) — plus nvm sourcing so zsh sessions get the Node
+installed in FR-08. Sets zsh as the default shell (`sudo chsh`). With
 `--with-zsh-completions`, also clones `zsh-users/zsh-completions` and adds its
 `src` directory to `fpath` before compinit. Skips everything if the marker
 block already exists. Prints measured interactive startup time
@@ -281,7 +284,7 @@ non-zero if any item fails.
   reported with versions and skipped, not reinstalled.
 - Provisioning uses apt with the deb822 source keyed by the detected codename;
   a non-Debian distro aborts at FR-05 with a clear message.
-- Remote installers (DDEV, bun, NodeSource) are downloaded to a file before
+- Remote installers (DDEV, bun, nvm) are downloaded to a file before
   execution; the mkcert binary and zsh plugin tags are pinned.
 - After provisioning: curl, git, node, npm, bun, zsh, docker, ddev, mkcert all
   report versions; hello-world ran without sudo; Portainer is running and

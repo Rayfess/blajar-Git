@@ -46,8 +46,9 @@ if [[ $EUID -eq 0 ]]; then
 fi
 
 # --------------------------------------------- configuration & references --
-NODE_MAJOR=22   # Node.js LTS major; bump deliberately (NodeSource docs:
-                # https://github.com/nodesource/distributions)
+NVM_VERSION="v0.40.3"   # pinned nvm release; verify before bumping:
+                        # https://github.com/nvm-sh/nvm/releases
+                        # Node.js itself tracks current LTS via 'nvm install --lts'
 MKCERT_VERSION="v1.4.4"   # pinned upstream release; verify before bumping:
                           # https://github.com/FiloSottile/mkcert/releases
 # zsh plugins are sourced into every interactive shell - pinning the upstream
@@ -59,6 +60,7 @@ ZSH_SYNTAX_HIGHLIGHTING_REF="0.8.0"    # github.com/zsh-users/zsh-syntax-highlig
 #   Docker CE install : https://docs.docker.com/engine/install/debian/
 #   DDEV              : https://docs.ddev.com/ (install script: ddev.com/install.sh)
 #   bun               : https://bun.sh/docs/installation (its installer needs unzip)
+#   nvm (Node.js)     : https://github.com/nvm-sh/nvm (pinned release above)
 #   mkcert            : https://github.com/FiloSottile/mkcert
 #   Portainer CE      : https://docs.portainer.io/start/install-ce/server/docker
 #   zsh plugins       : https://github.com/zsh-users/zsh-autosuggestions + zsh-syntax-highlighting
@@ -181,8 +183,17 @@ inv() { # label, binary, [version args...]
 inv docker docker --version
 inv ddev   ddev -v
 inv git    git --version
-inv node   node --version
-inv npm    npm --version
+# node/npm come from nvm (~/.nvm) - load it in-session to report versions
+if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+    . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
+    if command -v node >/dev/null 2>&1; then
+        ok "node: $(node --version) (npm $(npm --version)) via nvm"
+    else
+        echo "  [ABSENT] node: nvm present but no Node version installed yet (FR-08 installs LTS)"
+    fi
+else
+    echo "  [ABSENT] node/npm: not installed (nvm is the install path)"
+fi
 inv zsh    zsh --version
 inv curl   curl --version
 # bun lives outside PATH (~/.bun/bin) until a session adds it - check the file too
@@ -263,8 +274,8 @@ task_end
 
 # ============================================================ FR-08 ========
 task_start "FR-08" "Development tools" \
-    "Install only what is missing: curl, git, zsh, C toolchain, Node.js LTS + npm (NodeSource), bun (official installer). Names mapped per distro (PRD)."
-BASE_PKGS=(curl git zsh ca-certificates unzip build-essential)   # unzip: required by bun's installer
+    "Install only what is missing: curl, git, zsh, unzip, xz-utils, build-essential, Node.js LTS + npm (via pinned nvm), bun (official installer)."
+BASE_PKGS=(curl git zsh ca-certificates unzip xz-utils build-essential)   # unzip: bun installer; xz-utils: nvm node tarballs
 MISSING_PKGS=()
 for p in "${BASE_PKGS[@]}"; do
     if ! pm_installed "$p"; then MISSING_PKGS+=("$p"); fi
@@ -275,15 +286,19 @@ if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
 else
     skip "base packages all present"
 fi
-if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+    . "$HOME/.nvm/nvm.sh"
+    skip "node/npm already present via nvm ($(node --version))"
+elif command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
     skip "node/npm already present ($(node --version))"
 else
-    NODE_SETUP="$(mktemp)"
-    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" -o "$NODE_SETUP"
-    sudo -E bash "$NODE_SETUP"   # download as user, execute under sudo (NodeSource docs flow)
-    rm -f "$NODE_SETUP"
-    pm_install nodejs
-    chg "Node.js LTS installed: $(node --version) (npm $(npm --version))"
+    NVM_INSTALLER="$(mktemp)"
+    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "$NVM_INSTALLER"   # inspectable before running
+    bash "$NVM_INSTALLER"
+    rm -f "$NVM_INSTALLER"
+    . "$HOME/.nvm/nvm.sh"          # load nvm in this session (installer wires ~/.bashrc; zsh wiring is FR-09)
+    nvm install --lts              # current LTS Node + bundled npm (official nvm flow)
+    chg "Node.js LTS installed via nvm: $(node --version) (npm $(npm --version)) (nvm $(nvm --version))"
 fi
 if [[ -x "$HOME/.bun/bin/bun" ]] || command -v bun >/dev/null 2>&1; then
     skip "bun already present"
@@ -332,6 +347,8 @@ else
     {
         echo '# >>> zcode-managed (provision-wsl.sh) >>>'
         echo 'export PATH="$HOME/.bun/bin:$PATH"'
+        echo 'export NVM_DIR="$HOME/.nvm"'
+        echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
         echo 'autoload -Uz compinit'
         if [[ "$WITH_COMPLETIONS" == "1" ]]; then
             echo 'fpath=(~/.zsh/plugins/zsh-completions/src $fpath)'
