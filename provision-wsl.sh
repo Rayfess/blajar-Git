@@ -40,8 +40,9 @@ done
 if [[ $EUID -eq 0 ]]; then
     echo "${C_FAIL}[ABORT] Running as root is not supported. Run as your normal WSL user.${C_RESET}" >&2
     echo "        (Installs would land in /root and 'usermod' would target the wrong user.)" >&2
-    echo "${C_FAIL}        Debian without a completed first launch defaults to root:${C_RESET}" >&2
-    echo "        launch 'wsl -d Debian' once, create your UNIX user, then rerun this script." >&2
+    echo "${C_FAIL}        Debian without a completed first launch defaults to root.${C_RESET}" >&2
+    echo "        run wsl-setup.ps1 (its default-user gate creates the UNIX user)," >&2
+    echo "        or create one manually: useradd -m -G sudo -s /bin/bash <name>" >&2
     exit 1
 fi
 

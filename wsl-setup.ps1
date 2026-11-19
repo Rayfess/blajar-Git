@@ -237,14 +237,62 @@ sparseVhd=true
 
     Write-Host ""
     Write-Info "Chaining into Linux provisioning. After ONE sudo password prompt it runs unattended."
-    # Default-user preflight: a distro without a completed first launch runs as
-    # root - catch it here with clear instructions instead of dying inside FR-05.
+    # Default-user gate: a distro without a completed first launch runs as root.
+    # Best practice (verified): create the UNIX user non-interactively here with
+    # credentials chosen by the user in PowerShell - the root account stays
+    # password-locked (WSL '-u root' ignores Linux passwords, so a root password
+    # would provide no protection while a public default would be a known
+    # credential). Then chain as the new user - no manual Debian launch.
     $defaultUser = (Invoke-Wsl "-d $distro -e id -un" | Clean-WslOutput | Select-Object -First 1)
     if (-not $defaultUser -or $defaultUser -eq 'root') {
-        Write-FailLine "Debian default user is '$defaultUser' - provisioning refuses to run as root."
-        Write-Info "Fix: launch 'wsl -d $distro' once, create your UNIX user, then rerun this script."
-        Complete-Stage "blocked: no default UNIX user (first launch missing)"
-        exit 1
+        Write-WarnLine "Debian default user is root (first launch not completed) - creating your UNIX user now."
+        do {
+            $unixUser = (Read-Host "Choose a UNIX username (lowercase, no spaces)").Trim()
+        } until ($unixUser -match '^[a-z_][a-z0-9_-]{0,31}$' -and $unixUser -ne 'root')
+        do {
+            $sec = Read-Host "Choose a password (min 6 chars - used for sudo during provisioning)" -AsSecureString
+            $sec2 = Read-Host "Confirm password" -AsSecureString
+            $b1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+            $b2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec2)
+            $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b1)
+            $plain2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b2)
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b1)
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b2)
+        } until ($plain.Length -ge 6 -and $plain -ceq $plain2)
+        Write-Info "Creating UNIX user '$unixUser' (home, sudo group, bash)..."
+        Invoke-Wsl "-d $distro -u root -- useradd -m -G sudo -s /bin/bash $unixUser"
+        if ($LASTEXITCODE -ne 0) {
+            Write-FailLine "useradd failed (exit $LASTEXITCODE) - username may already exist."
+            Complete-Stage "blocked: user creation failed"
+            exit 1
+        }
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        "$unixUser`:$plain" | & cmd.exe /c "wsl.exe -d $distro -u root -- chpasswd 2>&1"
+        $ErrorActionPreference = $eap
+        if ($LASTEXITCODE -ne 0) {
+            Write-FailLine "chpasswd failed (exit $LASTEXITCODE)."
+            Complete-Stage "blocked: password setup failed"
+            exit 1
+        }
+        Write-Ok "UNIX user '$unixUser' created with your password."
+        Invoke-Wsl "--manage $distro --set-default-user $unixUser"
+        if ($LASTEXITCODE -ne 0) {
+            # Fallback: registry DefaultUid (works on any WSL version)
+            $uidLine = (Invoke-Wsl "-d $distro -u root -- id -u $unixUser" | Clean-WslOutput | Select-Object -First 1)
+            $guid = $null
+            foreach ($k in (Get-ChildItem 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss' -ErrorAction SilentlyContinue)) {
+                $n = (Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue).DistributionName
+                if ($n -eq $distro) { $guid = $k.PSPath; break }
+            }
+            if ($guid -and $uidLine) {
+                Set-ItemProperty -Path $guid -Name DefaultUid -Value ([int]$uidLine)
+                Write-Info "Default user set via registry (fallback)."
+            } else {
+                Write-WarnLine "could not set default user automatically - run: wsl --manage $distro --set-default-user $unixUser"
+            }
+        }
+        $defaultUser = $unixUser
+        Invoke-Wsl "-t $distro"   # terminate the distro so the next launch reads the new default user
     }
     Write-Ok "Default WSL user: $defaultUser"
     Write-Stage ("Chain: wsl -d {0} -e bash {1}" -f $distro, $linuxScript)
@@ -268,12 +316,12 @@ elseif ($featureEnabled) {
         Write-WarnLine "--no-launch not supported here; running plain wsl --install -d Debian"
         Invoke-Wsl '--install -d Debian'
     }
-    Complete-Stage "Debian installed - first launch required, then rerun"
+    Complete-Stage "Debian installed - rerun to create your UNIX user and chain"
     Write-Host ""
-    Write-Host "[FIRST LAUNCH REQUIRED]" -ForegroundColor Yellow
-    Write-Host "  1. Open the distro first launch:  wsl -d Debian   (or Start menu -> Debian)"
-    Write-Host "  2. Create your UNIX username and password when prompted."
-    Write-Host "  3. Run this script again - it will write .wslconfig and chain into provisioning."
+    Write-Host "[NEXT STEP]" -ForegroundColor Yellow
+    Write-Host "  1. Run this script again (same command)."
+    Write-Host "  2. It will ask for your UNIX username and password (in PowerShell),"
+    Write-Host "     then chain into provisioning automatically. No manual Debian launch."
     exit 0
 }
 else {
@@ -295,6 +343,6 @@ else {
     Write-Host "  the Debian distro itself never needs one."
     Write-Host "  1. Restart Windows to finish enabling the WSL features."
     Write-Host "  2. Run this script again (same command) - the distro is already unpacked,"
-    Write-Host "     so it goes straight to the first-launch check, then provisioning."
+    Write-Host "     so it goes straight to the default-user gate, then provisioning."
     exit 0
 }

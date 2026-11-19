@@ -57,8 +57,8 @@ Two automations:
   no extra install needed)
 - Run elevated as Administrator: `powershell -ExecutionPolicy Bypass -File wsl-setup.ps1`
 - Location: repository root
-- Interactive where the OS requires it: elevation prompt, first-launch user
-  creation
+- Interactive where the OS requires it: elevation prompt, UNIX credentials
+  prompt (default-user gate)
 
 ### provision-wsl.sh (Linux / WSL)
 - Executable: bash inside the WSL distro
@@ -121,9 +121,9 @@ active, and a list of all existing containers.
   documentation flags compinit startup cost.
 - The Linux script is unattended after one sudo prompt (sudo timestamp kept
   alive); the Windows script is interactive only where the OS requires it
-  (elevation, first-launch user creation).
+  (elevation, UNIX credentials prompt).
 - Fail fast on the Linux side: the first failed step aborts with a clear message.
-  Windows-side gates (restart, first launch) exit with resume instructions
+  Windows-side gates (restart, default-user gate) exit with resume instructions
   instead; every gate is resumable by rerunning wsl-setup.ps1.
 - No project is created; the run ends at the status report.
 - Version policy, declared deliberately: DDEV, Docker CE, and the Portainer
@@ -131,6 +131,13 @@ active, and a list of all existing containers.
   plugin tags are pinned (supply-chain control); Node.js itself tracks the
   current LTS via `nvm install --lts`. Remote installer scripts are downloaded
   to a file first (inspectable) instead of piped straight into a shell.
+- Credentials policy (verified best practice): the UNIX user is created
+  non-interactively from a PowerShell prompt (username validated against
+  useradd rules, password prompted via SecureString and set through chpasswd
+  stdin) - credentials are never hardcoded in this repository. The root
+  account stays password-locked: WSL's `-u root` ignores Linux passwords, so
+  a root password would provide no protection while a public default would be
+  a known credential.
 - PowerShell 5.1 native-stderr quirk (learned from the first real run):
   every wsl.exe call merges stderr into stdout via `cmd /c ... 2>&1` and runs
   with ErrorActionPreference 'Continue', so native warnings (e.g. the
@@ -154,17 +161,22 @@ below the documented `memory=10GB`). Warns if Docker Desktop is installed
   the list of registered distros and removal instructions if more than one),
   validates the distro is Debian (aborts otherwise), writes `.wslconfig`
   (FR-03), then chains into Linux provisioning by invoking provision-wsl.sh
-  in the distro.
+  in the distro. A default-user gate runs before the chain: when the distro
+  still defaults to root (first launch not completed), the script prompts for
+  a UNIX username and password in PowerShell, creates the user
+  non-interactively (useradd -m -G sudo via `-u root`, password set through
+  chpasswd stdin), sets it as the default user (`--manage --set-default-user`,
+  registry fallback), terminates the distro so the new default applies, and
+  chains as that user - no manual Debian launch.
 - Branch 2 - distro absent, WSL feature absent: run `wsl --install -d Debian`
   (Debian-only applies to every branch), print restart feedback, exit. The
   restart is for the Windows feature activation only (first-time); the Debian
   distro itself never requires one. Rerunning after restart lands in Branch 1,
-  whose default-user preflight expects the first launch to have created the
-  UNIX user.
+  whose default-user gate creates the UNIX user from a PowerShell prompt.
 - Branch 3 - distro absent, WSL feature present: install Debian directly
-  (`wsl --install -d Debian`, no distro picker), then exit with first-launch
-  instructions (the distro's first launch interactively creates the UNIX
-  user). Rerunning lands in Branch 1.
+  (`wsl --install -d Debian`, no distro picker), then exit. Rerunning lands
+  in Branch 1, whose default-user gate creates the UNIX user from a
+  PowerShell prompt (no manual first launch).
 
 ### FR-03 - Write .wslconfig
 Writes `%UserProfile%\.wslconfig` with the exact documented content, shows the
@@ -272,8 +284,9 @@ non-zero if any item fails.
 
 - From bare Windows (no WSL feature): wsl-setup.ps1 installs the feature, prints
   restart feedback, and rerunning after restart reaches Branch 3.
-- From Branch 3: Debian is installed directly (no picker); after first launch,
-  rerunning chains into Linux provisioning without further prompts.
+- From Branch 3: Debian is installed directly (no picker); on rerun the
+  default-user gate prompts for a UNIX username and password in PowerShell,
+  then chains into Linux provisioning without further prompts.
 - With more than one distro registered, Branch 1 aborts with the full list and
   `wsl --unregister` instructions (single-distro rule). With a non-Debian distro
   installed, Branch 1 aborts with a Debian-only message.
@@ -308,7 +321,7 @@ non-zero if any item fails.
 | Windows/WSL version too old for Mirrored/systemd | High | FR-04 warning + FAIL in final report |
 | `memory=10GB` exceeds physical RAM | Medium | Preflight warning (non-blocking) |
 | Docker Desktop installed on Windows | High | Preflight detection + warning per Docker docs |
-| First distro launch is interactive (UNIX user creation) | Medium | Script exits with instructions; rerun resumes (Branch 1) |
+| Interactive distro OOBE bypassed via non-interactive user creation | Medium | useradd/chpasswd run via `-u root` with a narrow scope; failures abort with clear messages |
 | Non-Debian distro chosen or installed | Medium | Abort on unknown; Debian >= 12 only; Branch 3 installs Debian directly; Branch 1 validates Debian |
 | More than one distro registered | Medium | Single-distro rule: abort with list + `wsl --unregister` instructions |
 | `curl \| bash` supply-chain trust | Medium | Remote installers downloaded to file first; mkcert binary and zsh plugin tags pinned; official domains only |

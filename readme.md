@@ -54,8 +54,9 @@ for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
 
 3. The script routes itself (decision tree):
    - WSL feature missing → installs it → **restart Windows** → run again
-   - Feature present, no distro → installs **Debian** → **first launch**
-     (create your UNIX user) → run again
+   - Feature present, no distro → installs **Debian** → run again →
+     choose your UNIX username/password **in PowerShell** (no manual Debian
+     launch) → provisioning chains automatically
    - Debian installed → writes `.wslconfig` → chains Linux provisioning
      automatically
 
@@ -75,8 +76,10 @@ for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
 
 - **Debian-only** and **single-distro**: extra or non-Debian distros abort with
   fix-it instructions (`wsl --unregister <name>`).
-- Manual steps by design: the Windows restart, the first-launch UNIX user
-  creation, and uninstalling Docker Desktop if present (warned by the script).
+- Manual steps by design: the Windows restart (first-time feature activation)
+  and uninstalling Docker Desktop if present (warned by the script). The UNIX
+  user is created automatically — you only choose its username and password
+  when prompted in PowerShell.
 - Portainer is bound to loopback only: `https://127.0.0.1:9443`.
 - Every task prints what it changes; nothing is installed twice (reruns are safe).
 - After PASS: `cd ~/projects/<project> && ddev start`, Portainer at
