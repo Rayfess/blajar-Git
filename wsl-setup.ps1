@@ -235,104 +235,26 @@ sparseVhd=true
     Write-Host ""
     Write-Info "Chaining into Linux provisioning. After ONE sudo password prompt it runs unattended."
     # Default-user gate: a distro without a completed first launch runs as root.
-    # Best practice (verified): create the UNIX user non-interactively with
-    # credentials chosen by the user in PowerShell; the root account stays
-    # password-locked (WSL '-u root' ignores Linux passwords, so a root password
-    # would provide no protection while a public default would be a known
-    # credential). Password delivery is FILE-BASED: piped stdin through
-    # cmd/wsl.exe proved unreliable in real runs (twice), so all password
-    # material is written to a user-private temp file on the automounted drive
-    # and consumed INSIDE Debian by helper scripts - no stdin passthrough, no
-    # quoting layers. The password is then positively verified with `sudo -S`
-    # as the default user before any chaining. If the default user already
-    # exists (a previous run failed before sudo worked), the gate offers an
-    # in-place password reset instead.
+    # The native, documented flow applies (learn.microsoft.com/windows/wsl:
+    # "Once you have installed WSL, you will need to create a user account and
+    # password for your newly installed Linux distribution") - the first launch
+    # of the distro opens its own setup and asks for the UNIX username and
+    # password. The automation does NOT create users or touch credentials
+    # non-interactively; it guides the user to the native flow and resumes
+    # automatically once it is done.
     $defaultUser = (Invoke-Wsl "-d $distro -e id -un" | Clean-WslOutput | Select-Object -First 1)
-    $plain = $null
-    $unixUser = $null
-    $needPassword = $false
     if (-not $defaultUser -or $defaultUser -eq 'root') {
-        Write-WarnLine "Debian default user is root (first launch not completed) - creating your UNIX user now."
-        do {
-            $unixUser = (Read-Host "Choose a UNIX username (lowercase, no spaces)").Trim()
-        } until ($unixUser -match '^[a-z_][a-z0-9_-]{0,31}$' -and $unixUser -ne 'root')
-        Write-Info "Creating UNIX user '$unixUser' (home, sudo group, bash)..."
-        Invoke-Wsl "-d $distro -u root -- useradd -m -G sudo -s /bin/bash $unixUser"
-        if ($LASTEXITCODE -ne 0) {
-            Write-FailLine "useradd failed (exit $LASTEXITCODE) - username may already exist."
-            Complete-Stage "blocked: user creation failed"
-            exit 1
-        }
-        Invoke-Wsl "--manage $distro --set-default-user $unixUser"
-        if ($LASTEXITCODE -ne 0) {
-            # Fallback: registry DefaultUid (works on any WSL version)
-            $uidLine = (Invoke-Wsl "-d $distro -u root -- id -u $unixUser" | Clean-WslOutput | Select-Object -First 1)
-            $guid = $null
-            foreach ($k in (Get-ChildItem 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss' -ErrorAction SilentlyContinue)) {
-                $n = (Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue).DistributionName
-                if ($n -eq $distro) { $guid = $k.PSPath; break }
-            }
-            if ($guid -and $uidLine) {
-                Set-ItemProperty -Path $guid -Name DefaultUid -Value ([int]$uidLine)
-                Write-Info "Default user set via registry (fallback)."
-            } else {
-                Write-WarnLine "could not set default user automatically - run: wsl --manage $distro --set-default-user $unixUser"
-            }
-        }
-        $defaultUser = $unixUser
-        Invoke-Wsl "-t $distro"   # terminate so the next launch uses the new default user
-        $needPassword = $true
-    } else {
-        Write-Ok "Default WSL user: $defaultUser (exists)"
-        $reset = Read-Host "Reset password for '$defaultUser' now? (y/n - choose y if a previous run failed before sudo worked)"
-        if ($reset -match '^[yY]') {
-            $unixUser = $defaultUser
-            $needPassword = $true
-        } else {
-            Write-Info "keeping the existing password - provisioning will expect it at the sudo prompt."
-        }
-    }
-    if ($needPassword) {
-        do {
-            $sec = Read-Host "Choose a password (min 6 chars, printable ASCII - used for sudo)" -AsSecureString
-            $sec2 = Read-Host "Confirm password" -AsSecureString
-            $b1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
-            $b2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec2)
-            $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b1)
-            $plain2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b2)
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b1)
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b2)
-            if ($plain.Length -lt 6 -or $plain -cne $plain2 -or $plain -notmatch '^[\x20-\x7E]+$' -or $plain -match "'") {
-                Write-WarnLine "password invalid: min 6 chars, both entries must match, printable ASCII, no single quotes - try again."
-            }
-        } until ($plain.Length -ge 6 -and $plain -ceq $plain2 -and $plain -match '^[\x20-\x7E]+$' -and $plain -notmatch "'")
-        # Password delivery + verification (community-verified canonical method):
-        # microsoft/WSL#42094 and #12523 - piped stdin into wsl.exe is discarded
-        # or intermittent, which is exactly why the previous two attempts failed.
-        # The canonical pattern instead runs echo|chpasswd INSIDE the VM via
-        # `wsl -u root -- bash -c`, so no Windows stdin is involved at all. The
-        # password then lives briefly in the WSL command line (local-only,
-        # root-visible) - accepted tradeoff for a local provisioning run.
-        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-        Write-Info "Setting password for '$unixUser' (echo|chpasswd inside the VM)..."
-        & wsl.exe -d $distro -u root -- bash -c "echo '$unixUser`:$plain' | chpasswd" 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-FailLine "chpasswd failed (exit $LASTEXITCODE)."
-            Complete-Stage "blocked: password setup failed"
-            exit 1
-        }
-        Write-Info "Verifying the password is accepted by sudo (as '$unixUser')..."
-        $sudoCheck = (& wsl.exe -d $distro -e bash -c "echo '$plain' | sudo -S -k id -un" 2>&1 | Clean-WslOutput | Select-Object -Last 1)
-        $ErrorActionPreference = $eap
-        if ($sudoCheck -ne $unixUser) {
-            Write-FailLine "password verification failed - sudo did not accept it (got: '$sudoCheck')."
-            Write-Info "reset manually if needed: wsl -d $distro -u root -- bash -c `"passwd $unixUser`""
-            Complete-Stage "blocked: password verification failed"
-            exit 1
-        }
-        Write-Ok "password verified - sudo accepts it."
-    } else {
-        Write-Info "keeping the existing password - provisioning will expect it at the sudo prompt."
+        Write-WarnLine "Debian default user is root - the native first launch has not been completed yet."
+        Write-Host ""
+        Write-Host "[FIRST LAUNCH REQUIRED]" -ForegroundColor Yellow
+        Write-Host "  This is the documented setup flow - credentials are typed natively"
+        Write-Host "  in Debian and never pass through PowerShell:"
+        Write-Host "  1. Launch the distro:  wsl -d $distro   (or Start menu -> Debian)"
+        Write-Host "  2. Create your UNIX username and password when the distro asks (native setup)."
+        Write-Host "  3. Exit the Debian shell (exit), then run this script again -"
+        Write-Host "     it will continue into provisioning automatically."
+        Complete-Stage "blocked: native first launch required (create your UNIX user)"
+        exit 1
     }
     Write-Ok "Default WSL user: $defaultUser"
     Write-Stage ("Chain: wsl -d {0} -e bash {1}" -f $distro, $linuxScript)
