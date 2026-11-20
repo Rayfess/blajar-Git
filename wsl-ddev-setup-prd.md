@@ -117,8 +117,9 @@ active, and a list of all existing containers.
   for its startup cost). Plugins are git-cloned `--depth=1` at pinned upstream
   release tags (supply-chain control; fallback to latest if the tag is missing)
   and sourced directly; `zsh-syntax-highlighting` is sourced last, as its
-  documentation requires. `zsh-completions` is opt-in because its own
-  documentation flags compinit startup cost.
+  documentation requires. `zsh-completions` is included by default via
+  fpath-before-compinit (near-zero startup cost; the project's documented
+  cost applies to the oh-my-zsh plugin mechanism, which we do not use).
 - The Linux script is unattended after one sudo prompt (sudo timestamp kept
   alive); the Windows script is interactive only where the OS requires it
   (elevation, UNIX credentials prompt).
@@ -137,8 +138,12 @@ active, and a list of all existing containers.
   stdin) - credentials are never hardcoded in this repository. The root
   account stays password-locked: WSL's `-u root` ignores Linux passwords, so
   a root password would provide no protection while a public default would be
-  a known credential. The password is additionally verified at gate time with
-  `sudo -S id -un` before provisioning chains.
+  a known credential. Password delivery uses the canonical in-VM
+  `echo | chpasswd` pattern — no Windows stdin (microsoft/WSL#42094 discards
+  piped stdin; #12523 documents intermittent pipe failures) — and the password
+  is positively verified at gate time with in-VM `sudo -S id -un` before
+  provisioning chains; when the default user already exists, the gate offers
+  an in-place password reset (self-healing after failed runs).
 - PowerShell 5.1 native-stderr quirk (learned from the first real run):
   every wsl.exe call merges stderr into stdout via `cmd /c ... 2>&1` and runs
   with ErrorActionPreference 'Continue', so native warnings (e.g. the
@@ -165,8 +170,10 @@ below the documented `memory=10GB`). Warns if Docker Desktop is installed
   in the distro. A default-user gate runs before the chain: when the distro
   still defaults to root (first launch not completed), the script prompts for
   a UNIX username and password in PowerShell, creates the user
-  non-interactively (useradd -m -G sudo via `-u root`, password set through
-  chpasswd stdin, positively verified via `sudo -S id -un` at gate time), sets
+  non-interactively (useradd -m -G sudo via `-u root`, password delivered via
+  the canonical in-VM `echo | chpasswd` — no Windows stdin, per
+  microsoft/WSL#42094/#12523 — and positively verified via in-VM `sudo -S
+  id -un` at gate time), sets
   it as the default user (`--manage --set-default-user`,
   registry fallback), terminates the distro so the new default applies, and
   chains as that user - no manual Debian launch.
@@ -224,9 +231,10 @@ Clones `zsh-users/zsh-autosuggestions` and `zsh-users/zsh-syntax-highlighting`
 sources them directly — `zsh-syntax-highlighting` sourced last per its
 documentation, with a cached `compinit` (its skipped security audit is a
 documented tradeoff) — plus nvm sourcing so zsh sessions get the Node
-installed in FR-08. Sets zsh as the default shell (`sudo chsh`). With
-`--with-zsh-completions`, also clones `zsh-users/zsh-completions` and adds its
-`src` directory to `fpath` before compinit. Skips everything if the marker
+installed in FR-08. Sets zsh as the default shell (`sudo chsh`). Clones
+`zsh-users/zsh-completions` by default (pinned `0.34.0`), adding its `src`
+directory to `fpath` before compinit, and enables AUTO_CD. Skips everything
+if the marker
 block already exists. Prints measured interactive startup time
 (`time zsh -i -c exit`); soft target: under 150 ms. The change applies to
 newly opened sessions.
@@ -308,7 +316,8 @@ non-zero if any item fails.
 - A newly opened WSL session starts in zsh with autosuggestions working and
   syntax highlighting active; the managed `.zshrc` block is the only change to
   the file; measured startup time is printed and under the 150 ms soft target.
-- `zsh-completions` is installed only when `--with-zsh-completions` is passed.
+- `zsh-completions` is installed by default (pinned tag `0.34.0`), with its
+  `src` directory on `fpath` before compinit.
 - The final block lists all containers via `docker ps -a`, each status item
   PASS/FAIL, and the script exits non-zero on any FAIL.
 - Running either script again produces no errors and no duplicated state

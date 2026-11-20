@@ -10,14 +10,12 @@ Run elevated:
 Optional switches (forwarded to provision-wsl.sh in Branch 1):
     -Upgrade              -> --upgrade               (apt upgrade, FR-07)
     -SkipCaImport         -> --skip-ca-import        (FR-15)
-    -WithZshCompletions   -> --with-zsh-completions  (FR-09 opt-in)
     -Pause <seconds>      -> --pause <seconds>       (FR-17, default 5)
 #>
 [CmdletBinding()]
 param(
     [switch]$Upgrade,
     [switch]$SkipCaImport,
-    [switch]$WithZshCompletions,
     [int]$Pause = 5
 )
 
@@ -232,67 +230,39 @@ sparseVhd=true
     $flags = @()
     if ($Upgrade) { $flags += '--upgrade' }
     if ($SkipCaImport) { $flags += '--skip-ca-import' }
-    if ($WithZshCompletions) { $flags += '--with-zsh-completions' }
     if ($Pause -ne 5) { $flags += @('--pause', "$Pause") }
 
     Write-Host ""
     Write-Info "Chaining into Linux provisioning. After ONE sudo password prompt it runs unattended."
     # Default-user gate: a distro without a completed first launch runs as root.
-    # Best practice (verified): create the UNIX user non-interactively here with
-    # credentials chosen by the user in PowerShell - the root account stays
+    # Best practice (verified): create the UNIX user non-interactively with
+    # credentials chosen by the user in PowerShell; the root account stays
     # password-locked (WSL '-u root' ignores Linux passwords, so a root password
     # would provide no protection while a public default would be a known
-    # credential). Then chain as the new user - no manual Debian launch.
+    # credential). Password delivery is FILE-BASED: piped stdin through
+    # cmd/wsl.exe proved unreliable in real runs (twice), so all password
+    # material is written to a user-private temp file on the automounted drive
+    # and consumed INSIDE Debian by helper scripts - no stdin passthrough, no
+    # quoting layers. The password is then positively verified with `sudo -S`
+    # as the default user before any chaining. If the default user already
+    # exists (a previous run failed before sudo worked), the gate offers an
+    # in-place password reset instead.
     $defaultUser = (Invoke-Wsl "-d $distro -e id -un" | Clean-WslOutput | Select-Object -First 1)
+    $plain = $null
+    $unixUser = $null
+    $needPassword = $false
     if (-not $defaultUser -or $defaultUser -eq 'root') {
         Write-WarnLine "Debian default user is root (first launch not completed) - creating your UNIX user now."
         do {
             $unixUser = (Read-Host "Choose a UNIX username (lowercase, no spaces)").Trim()
         } until ($unixUser -match '^[a-z_][a-z0-9_-]{0,31}$' -and $unixUser -ne 'root')
-        do {
-            $sec = Read-Host "Choose a password (min 6 chars - used for sudo during provisioning)" -AsSecureString
-            $sec2 = Read-Host "Confirm password" -AsSecureString
-            $b1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
-            $b2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec2)
-            $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b1)
-            $plain2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b2)
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b1)
-            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b2)
-        if ($plain.Length -lt 6 -or $plain -cne $plain2 -or $plain -notmatch '^[\x20-\x7E]+$') {
-            Write-WarnLine "password invalid: min 6 chars, both entries must match, printable ASCII only - try again."
-        }
-    } until ($plain.Length -ge 6 -and $plain -ceq $plain2 -and $plain -match '^[\x20-\x7E]+$')
         Write-Info "Creating UNIX user '$unixUser' (home, sudo group, bash)..."
-        # (password must stay printable ASCII - it crosses stdin via ASCII encoding)
         Invoke-Wsl "-d $distro -u root -- useradd -m -G sudo -s /bin/bash $unixUser"
         if ($LASTEXITCODE -ne 0) {
             Write-FailLine "useradd failed (exit $LASTEXITCODE) - username may already exist."
             Complete-Stage "blocked: user creation failed"
             exit 1
         }
-        # Password delivery (real-run bug fixed): piping into `cmd /c "wsl ...
-        # chpasswd"` lost stdin, so chpasswd exited 0 WITHOUT setting anything
-        # and sudo later rejected every attempt. Write the credential to a temp
-        # file (UTF-8, no BOM) and pipe it straight into wsl.exe - no cmd layer.
-        $credFile = Join-Path $env:TEMP ('wsl-cred-' + [guid]::NewGuid().ToString('N') + '.tmp')
-        [IO.File]::WriteAllText($credFile, "$unixUser`:$plain`n")
-        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-        Get-Content $credFile | & wsl.exe -d $distro -u root -- chpasswd 2>&1
-        $ErrorActionPreference = $eap
-        Remove-Item $credFile -ErrorAction SilentlyContinue
-        # Positive verification: sudo -S must accept the password and echo the
-        # user. This is the safety net that would have caught the erlog bug.
-        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-        $sudoCheck = ("$plain" | & wsl.exe -d $distro -e sudo -S -k id -un 2>&1 | Clean-WslOutput | Select-Object -Last 1)
-        $ErrorActionPreference = $eap
-        if ($sudoCheck -ne $unixUser) {
-            Write-FailLine "password verification failed - sudo did not accept it (got: '$sudoCheck')."
-            Write-Info "reset manually if needed: wsl -d $distro -u root -- bash -c `"passwd $unixUser`""
-            Complete-Stage "blocked: password verification failed"
-            exit 1
-        }
-        Write-Ok "password verified - sudo accepts it."
-        Write-Ok "UNIX user '$unixUser' created with your password."
         Invoke-Wsl "--manage $distro --set-default-user $unixUser"
         if ($LASTEXITCODE -ne 0) {
             # Fallback: registry DefaultUid (works on any WSL version)
@@ -310,7 +280,59 @@ sparseVhd=true
             }
         }
         $defaultUser = $unixUser
-        Invoke-Wsl "-t $distro"   # terminate the distro so the next launch reads the new default user
+        Invoke-Wsl "-t $distro"   # terminate so the next launch uses the new default user
+        $needPassword = $true
+    } else {
+        Write-Ok "Default WSL user: $defaultUser (exists)"
+        $reset = Read-Host "Reset password for '$defaultUser' now? (y/n - choose y if a previous run failed before sudo worked)"
+        if ($reset -match '^[yY]') {
+            $unixUser = $defaultUser
+            $needPassword = $true
+        } else {
+            Write-Info "keeping the existing password - provisioning will expect it at the sudo prompt."
+        }
+    }
+    if ($needPassword) {
+        do {
+            $sec = Read-Host "Choose a password (min 6 chars, printable ASCII - used for sudo)" -AsSecureString
+            $sec2 = Read-Host "Confirm password" -AsSecureString
+            $b1 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+            $b2 = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec2)
+            $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b1)
+            $plain2 = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b2)
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b1)
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b2)
+            if ($plain.Length -lt 6 -or $plain -cne $plain2 -or $plain -notmatch '^[\x20-\x7E]+$' -or $plain -match "'") {
+                Write-WarnLine "password invalid: min 6 chars, both entries must match, printable ASCII, no single quotes - try again."
+            }
+        } until ($plain.Length -ge 6 -and $plain -ceq $plain2 -and $plain -match '^[\x20-\x7E]+$' -and $plain -notmatch "'")
+        # Password delivery + verification (community-verified canonical method):
+        # microsoft/WSL#42094 and #12523 - piped stdin into wsl.exe is discarded
+        # or intermittent, which is exactly why the previous two attempts failed.
+        # The canonical pattern instead runs echo|chpasswd INSIDE the VM via
+        # `wsl -u root -- bash -c`, so no Windows stdin is involved at all. The
+        # password then lives briefly in the WSL command line (local-only,
+        # root-visible) - accepted tradeoff for a local provisioning run.
+        $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        Write-Info "Setting password for '$unixUser' (echo|chpasswd inside the VM)..."
+        & wsl.exe -d $distro -u root -- bash -c "echo '$unixUser`:$plain' | chpasswd" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-FailLine "chpasswd failed (exit $LASTEXITCODE)."
+            Complete-Stage "blocked: password setup failed"
+            exit 1
+        }
+        Write-Info "Verifying the password is accepted by sudo (as '$unixUser')..."
+        $sudoCheck = (& wsl.exe -d $distro -e bash -c "echo '$plain' | sudo -S -k id -un" 2>&1 | Clean-WslOutput | Select-Object -Last 1)
+        $ErrorActionPreference = $eap
+        if ($sudoCheck -ne $unixUser) {
+            Write-FailLine "password verification failed - sudo did not accept it (got: '$sudoCheck')."
+            Write-Info "reset manually if needed: wsl -d $distro -u root -- bash -c `"passwd $unixUser`""
+            Complete-Stage "blocked: password verification failed"
+            exit 1
+        }
+        Write-Ok "password verified - sudo accepts it."
+    } else {
+        Write-Info "keeping the existing password - provisioning will expect it at the sudo prompt."
     }
     Write-Ok "Default WSL user: $defaultUser"
     Write-Stage ("Chain: wsl -d {0} -e bash {1}" -f $distro, $linuxScript)

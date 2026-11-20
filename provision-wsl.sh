@@ -7,7 +7,7 @@
 #
 # Run inside WSL (or chained by wsl-setup.ps1):
 #     bash provision-wsl.sh [--upgrade] [--skip-ca-import]
-#                           [--with-zsh-completions] [--pause N]
+#                           [--pause N]
 #
 # Unattended after ONE sudo password prompt (timestamp kept alive).
 # Fail fast on the first failed step (set -euo pipefail).
@@ -26,7 +26,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --upgrade)              UPGRADE=1 ;;
         --skip-ca-import)       SKIP_CA=1 ;;
-        --with-zsh-completions) WITH_COMPLETIONS=1 ;;
         --pause)                PAUSE="${2:?--pause needs a value}"; shift ;;
         *) echo "${C_FAIL}[ABORT] Unknown flag: $1${C_RESET}" >&2; exit 2 ;;
     esac
@@ -56,6 +55,7 @@ MKCERT_VERSION="v1.4.4"   # pinned upstream release; verify before bumping:
 # release tag is a supply-chain control. Clone falls back to latest if the
 # tag is missing upstream.
 ZSH_AUTOSUGGESTIONS_REF="0.7.1"        # github.com/zsh-users/zsh-autosuggestions
+ZSH_COMPLETIONS_REF="0.34.0"          # github.com/zsh-users/zsh-completions (default since fpath-before-compinit)
 ZSH_SYNTAX_HIGHLIGHTING_REF="0.8.0"    # github.com/zsh-users/zsh-syntax-highlighting
 # Source references (official docs, kept for traceability - PRD "no version rot"):
 #   Docker CE install : https://docs.docker.com/engine/install/debian/
@@ -314,7 +314,7 @@ task_end
 
 # ============================================================ FR-09 ========
 task_start "FR-09" "Shell setup (zsh)" \
-    "No framework by policy. Clone autosuggestions + syntax-highlighting, managed block in ~/.zshrc (syntax-highlighting sourced last per its docs)."
+    "No framework by policy. Clone autosuggestions + completions + syntax-highlighting (pinned tags), managed block in ~/.zshrc (nvm sourced, AUTO_CD on, syntax-highlighting last)."
 ZPLUG="$HOME/.zsh/plugins"
 mkdir -p "$ZPLUG"
 clone_plugin() { # url, ref ("" = latest), dir
@@ -333,9 +333,7 @@ clone_plugin() { # url, ref ("" = latest), dir
 }
 clone_plugin https://github.com/zsh-users/zsh-autosuggestions.git "$ZSH_AUTOSUGGESTIONS_REF" "$ZPLUG/zsh-autosuggestions"
 clone_plugin https://github.com/zsh-users/zsh-syntax-highlighting.git "$ZSH_SYNTAX_HIGHLIGHTING_REF" "$ZPLUG/zsh-syntax-highlighting"
-if [[ "$WITH_COMPLETIONS" == "1" ]]; then
-    clone_plugin https://github.com/zsh-users/zsh-completions.git "" "$ZPLUG/zsh-completions"
-fi
+clone_plugin https://github.com/zsh-users/zsh-completions.git "$ZSH_COMPLETIONS_REF" "$ZPLUG/zsh-completions"
 
 ZRC="$HOME/.zshrc"
 if grep -q '# >>> zcode-managed' "$ZRC" 2>/dev/null; then
@@ -350,10 +348,9 @@ else
         echo 'export PATH="$HOME/.bun/bin:$PATH"'
         echo 'export NVM_DIR="$HOME/.nvm"'
         echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
+        echo 'fpath=(~/.zsh/plugins/zsh-completions/src $fpath)'
+        echo 'setopt AUTO_CD'
         echo 'autoload -Uz compinit'
-        if [[ "$WITH_COMPLETIONS" == "1" ]]; then
-            echo 'fpath=(~/.zsh/plugins/zsh-completions/src $fpath)'
-        fi
         echo '# compinit -C: cached, skips the security audit (compaudit) - deliberate speed tradeoff'
         echo 'compinit -C'
         echo '[ -f ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ] && source ~/.zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh'

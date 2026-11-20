@@ -69,7 +69,6 @@ for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
 |------|--------|
 | `-Upgrade` | full `apt upgrade` during provisioning |
 | `-SkipCaImport` | skip importing the mkcert CA into Windows |
-| `-WithZshCompletions` | install the opt-in zsh-completions plugin |
 | `-Pause <seconds>` | change the per-task pause (default 5) |
 
 ### Notes
