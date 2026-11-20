@@ -133,5 +133,23 @@ Bugs found only by actually running the automation (or analyzing its output):
 |------|---------|
 | 18 Nov | session-groups fix · default-user preflight · restart attribution (09:00/05/10) |
 | 19 Nov | Sources readme · nvm migration · password delivery + gate verification (09:00/05/10) |
-| 20 Nov | completions default + AUTO_CD · native-flow revert (09:00/10) |
-| 21 Nov | **this MILESTONE.md** (09:00) |
+| 20 Nov | completions default + AUTO_CD (09:00) · flag redesign landed (09:05) · native-flow revert (09:10) · this MILESTONE.md (09:15) · history integrity notes (09:20) |
+
+## 11. History Integrity Notes (audit 2026-11-17)
+
+- **Object integrity**: `git fsck --no-dangling` clean — no corruption.
+- **Future-dated commits**: 12 commits (18–20 Nov) use author date =
+  commit date, both future-dated by design (contribution-graph queue).
+  Implication: author dates for those entries reflect the *scheduled* day,
+  not the real work moment; date-based filters (`git log --since`) and
+  forensic "when was this written" readings must account for that.
+- **Feature split across commits**: the Nov-17 flag redesign landed as two
+  scheduled commits — `0309695` (completions default + AUTO_CD, 15 lines in
+  provision) and `7f6cf73` (remaining flag surface, 42 lines). Verified via
+  `git show <commit> --stat` — messages match content in both. Lesson: a
+  commit message can legitimately describe only part of a feature when the
+  rest lands in a sibling commit; verify with `git show --stat`, not by
+  message alone.
+- **Versioning**: the repo carried no tags until `v0.1.0` (this audit date),
+  which marks the stable point: sandbox suite 23/23, component tests 17/17,
+  Debian-only installer complete. Future releases follow semver from here.
