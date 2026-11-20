@@ -6,7 +6,8 @@
 # distro from /etc/os-release and aborts on anything else.
 #
 # Run inside WSL (or chained by wsl-setup.ps1):
-#     bash provision-wsl.sh [--upgrade] [--skip-ca-import]
+#     bash provision-wsl.sh [--no-upgrade] [--no-portainer] [--shell zsh|bash]
+#                           [--skip-ca-import] [--log F] [--pause N]
 #                           [--pause N]
 #
 # Unattended after ONE sudo password prompt (timestamp kept alive).
@@ -18,19 +19,28 @@ set -euo pipefail
 USER="${USER:-$(id -un)}"
 
 # ---------------------------------------------------------------- flags ----
-UPGRADE=0
+UPGRADE=1
+SKIP_PORTAINER=0
+SHELL_CHOICE="zsh"
 SKIP_CA=0
-WITH_COMPLETIONS=0
+LOG_FILE=""
 PAUSE=5
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --upgrade)              UPGRADE=1 ;;
+        --no-upgrade)           UPGRADE=0 ;;
+        --no-portainer)         SKIP_PORTAINER=1 ;;
+        --shell)                SHELL_CHOICE="${2:?--shell needs zsh|bash}"; shift ;;
         --skip-ca-import)       SKIP_CA=1 ;;
+        --log)                  LOG_FILE="${2:?--log needs a file path}"; shift ;;
         --pause)                PAUSE="${2:?--pause needs a value}"; shift ;;
         *) echo "${C_FAIL}[ABORT] Unknown flag: $1${C_RESET}" >&2; exit 2 ;;
     esac
     shift
 done
+if [[ "$SHELL_CHOICE" != "zsh" && "$SHELL_CHOICE" != "bash" ]]; then
+    echo "${C_FAIL}[ABORT] unsupported --shell: $SHELL_CHOICE (zsh|bash)${C_RESET}" >&2
+    exit 2
+fi
 
 # --------------------------------------------- root guard (best practice) --
 # Everything here must run as the normal WSL user: tool installs (bun, zsh
@@ -88,6 +98,13 @@ if [[ -t 1 ]]; then
     C_RESET=$'\e[0m'
 else
     C_STAGE=''; C_OK=''; C_CHG=''; C_ABSENT=''; C_SANITIZE=''; C_SKIP=''; C_WARN=''; C_FAIL=''; C_BAR=''; C_RESET=''
+fi
+# --log F: tee the entire transcript to a file (post-mortem forensics). Started
+# AFTER the color decision so a colored console keeps its colors.
+if [[ -n "$LOG_FILE" ]]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    echo "transcript logging enabled: $LOG_FILE"
 fi
 fmt_time(){ local s="$1"; printf '%dm%02ds' $(( s / 60 )) $(( s % 60 )); }
 progress_bar(){ local done_n="$1"; local filled=$(( 26 * done_n / TOTAL )); \
@@ -261,15 +278,15 @@ ok "systemd active - config in effect"
 task_end
 
 # ============================================================ FR-07 ========
-task_start "FR-07" "Package index" \
-    "Index refresh every run (apt-get update); full upgrade only with --upgrade."
+task_start "FR-07" "Package index + base upgrade" \
+    "apt-get update every run; full base upgrade by default (--no-upgrade skips it - speed-first rerun)."
 pm_update
-ok "package index refreshed ($ID_LC)"
+ok "package index refreshed (apt)"
 if [[ "$UPGRADE" == "1" ]]; then
     pm_upgrade
-    ok "full package upgrade complete"
+    ok "full base upgrade complete (security currency)"
 else
-    skip "full upgrade (pass --upgrade to enable)"
+    skip "full base upgrade skipped (--no-upgrade)"
 fi
 task_end
 
@@ -314,7 +331,8 @@ task_end
 
 # ============================================================ FR-09 ========
 task_start "FR-09" "Shell setup (zsh)" \
-    "No framework by policy. Clone autosuggestions + completions + syntax-highlighting (pinned tags), managed block in ~/.zshrc (nvm sourced, AUTO_CD on, syntax-highlighting last)."
+    "No framework by policy. Clone autosuggestions + completions + syntax-highlighting (pinned tags), managed block in ~/.zshrc (nvm sourced, AUTO_CD on, syntax-highlighting last). --shell bash skips this whole stage."
+if [[ "$SHELL_CHOICE" != "bash" ]]; then
 ZPLUG="$HOME/.zsh/plugins"
 mkdir -p "$ZPLUG"
 clone_plugin() { # url, ref ("" = latest), dir
@@ -372,6 +390,7 @@ TIMEFORMAT='%3R'
 STARTUP_S=$( { time zsh -i -c exit >/dev/null 2>&1; } 2>&1 || true )
 STARTUP_MS=$(awk -v s="$STARTUP_S" 'BEGIN{printf "%d", s*1000}')
 ok "interactive zsh startup: ${STARTUP_MS} ms (soft target < 150 ms; first run builds the completion cache)"
+fi
 task_end
 
 # ============================================================ FR-10 ========
@@ -531,8 +550,10 @@ task_end
 
 # ============================================================ FR-16 ========
 task_start "FR-16" "Portainer" \
-    "GUI for Docker on https://localhost:9443 (container name: portainer, restart=always)."
-if portainer_exists; then
+    "GUI for Docker on https://127.0.0.1:9443 (container name: portainer, restart=always). --no-portainer skips this stage."
+if [[ "$SKIP_PORTAINER" == "1" ]]; then
+    skip "portainer skipped (--no-portainer)"
+elif portainer_exists; then
     PSTATE="$(portainer_state)"
     if [[ "$PSTATE" == "running" ]]; then
         ok "portainer container already running"
@@ -571,12 +592,16 @@ if [[ -n "$DDEV_V" ]] && run_docker info >/dev/null 2>&1; then
 else
     status "ddev" 1 "not installed or docker unreachable"
 fi
-PSTATE=$(portainer_state || true)
-if [[ "$PSTATE" == "running" ]] && \
-   { curl -k -fsS https://127.0.0.1:9443 >/dev/null 2>&1 || curl -k -fsS https://localhost:9443 >/dev/null 2>&1; }; then
-    status "portainer" 0 "running; https://127.0.0.1:9443 responds (loopback-only)"
+if [[ "$SKIP_PORTAINER" == "1" ]]; then
+    echo "  ${C_SKIP}[SKIP]${C_RESET} portainer: skipped (--no-portainer)"
 else
-    status "portainer" 1 "state=${PSTATE:-unknown}"
+    PSTATE=$(portainer_state || true)
+    if [[ "$PSTATE" == "running" ]] && \
+       { curl -k -fsS https://127.0.0.1:9443 >/dev/null 2>&1 || curl -k -fsS https://localhost:9443 >/dev/null 2>&1; }; then
+        status "portainer" 0 "running; https://127.0.0.1:9443 responds (loopback-only)"
+    else
+        status "portainer" 1 "state=${PSTATE:-unknown}"
+    fi
 fi
 if [[ "${WSL_SETUP_CAP_WARNING:-}" == "1" ]]; then
     status "windows capability (Mirrored/systemd)" 1 \
