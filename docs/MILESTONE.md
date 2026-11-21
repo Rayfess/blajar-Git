@@ -19,8 +19,9 @@ A one-command installer for a full Linux development environment on WSL2:
   hands off via a printed guide - the provisioning script is copied into the
   Linux filesystem and run from there (containment, Nov 20 decision).
 - `provision-wsl.sh` (Debian, 13 tasks): inventory → wsl.conf → apt → dev
-  tools (curl/git/zsh/unzip/build-essential) → nvm + Node LTS → zsh stack
-  (autosuggestions/completions/syntax-highlighting/AUTO_CD) → Docker CE →
+  tools (curl/git/zsh/fzf/unzip/build-essential) → nvm + Node LTS → zsh stack
+  v2 (antidote + smartcache + fzf-tab + completions + autosuggestions, patina,
+  atuin, zoxide, AUTO_CD) → Docker CE →
   DDEV → mkcert → CA import → Portainer (loopback) → PASS/FAIL status report.
 
 Scope decisions: **Debian-only**, single-distro rule, native first launch
@@ -31,12 +32,13 @@ password delivery, TTY-gated colored output. Full contract:
 ## 2. Status Snapshot (2026-11-20)
 
 - All work committed and pushed through `f7f5144` (scheduled 20 Nov 09:10).
-- Offline sandbox suite: **23/23 PASS** (5 scenarios incl. negative + gate).
+- Offline sandbox suite: **35/35 PASS** (5 scenarios incl. negative + gate; zsh
+  stack v2 wiring, exact pinned URLs, rerun idempotency, v1-migration heal).
 - PowerShell component tests: **17/17 PASS**.
 - **PENDING: the first real end-to-end installation run** — every real-run
   bug found so far (see §5) has a fix in place, but the fixed chain has not
   yet been proven end-to-end on the actual machine.
-- Scheduled commit queue: 18 Nov ×3, 19 Nov ×3, 20 Nov ×2 (contribution
+- Scheduled commit queue: 18 Nov ×3, 19 Nov ×3, 20 Nov ×5 (contribution
   graph lights up per scheduled date).
 
 ## 3. Evolution Timeline
@@ -50,7 +52,8 @@ password delivery, TTY-gated colored output. Full contract:
 | P4 | Nov 16–17 | Offline sandbox test suite built (`tests/` later moved out of repo); real-run debugging began (erlog.txt) |
 | P5 | Nov 17–18 | Real-run bug fixes (see §5), nvm migration, completions default + AUTO_CD, revert of the default-user gate back to native first launch |
 | P6 | Nov 18–20 | Scheduled commit queue filled (3+3+2); password delivery hardened per microsoft/WSL#42094 |
-| P7 | **pending** | First real end-to-end run + live verifiers |
+| P7 | Nov 20 | Portainer TLS bug fixed pre-run (cert was mounted but never loaded — `--sslcert/--sslkey`); zsh stack v2: antidote + smartcache + patina (replaces zsh-syntax-highlighting) + fzf-tab + atuin + zoxide, all pinned; v1 clone stack auto-migrated |
+| P8 | **pending** | First real end-to-end run + live verifiers |
 
 ## 4. Real-Run Bug Ledger
 
@@ -65,6 +68,9 @@ Bugs found only by actually running the automation (or analyzing its output):
 | 5 | Second stdin attempt (temp file + `Get-Content \| wsl.exe`) **still** empty | Same #42094 class — wsl.exe stdin passthrough unreliable through PS pipes | Same fix as #4; plus **positive gate-time verification**: `sudo -S -k id -un` must echo the username before chaining, otherwise FAIL with reset instructions |
 | 6 | `permission denied ... docker.sock` at FR-12 | `id -nG "$USER"` reads the group **database** (already updated by usermod), not the **session's** effective groups | `run_docker` checks `id -nG` (session), falls back to `sg docker` |
 | 7 | `WSL_E_DISTRO_NOT_FOUND` in the installer AND the Windows Terminal Debian profile, while `wsl -d Debian` works | Stale distro name after unregister/reinstall cycles: the registry `DefaultDistribution` GUID (read by `Get-DefaultDistro`) and the cached WT profile pointed at an unregistered name | Branch 1 auto-heals: validates the default against registered distros, runs `wsl --set-default <first registered>`; user-side verified order: `wsl --shutdown` → `wsl --set-default Debian` → `wsl -l -v` → restart Windows Terminal |
+| 8 | First real run (reached FR-09): `curl: (22) 404` on the zsh-patina `.deb` | Tag-prefix inconsistency across repos: patina's release tag is `1.12.0` (no `v`), the URL template added `v` — same class as the latent autosuggestions `0.7.1` vs `v0.7.1` bug | URL fixed; the verify-all battery HEAD-checks every pinned release URL (`curl -sIL` → 200) and the sim asserts the exact pinned URLs — tag-prefix regressions now fail the battery instead of a real run. Rerun resumes idempotently (antidote clone already done) |
+| 9 | `rm -rf ~/.cache/zsh-smartcache/* && exec zsh` leaves patina syntax highlighting dead (manual `eval "$(zsh-patina activate)"` works) | zsh-smartcache handles command output UNQUOTED (`eval $output`, `printf '%s' $output >| $cache` in its source): zsh word-splits patina's multi-line `activate` script into one mangled line, so the cached/reflowed output stops evaluating | patina no longer goes through smartcache — direct `command -v zsh-patina && eval "$(zsh-patina activate)"` in the managed block (patina's activate eval is cheap by design; zoxide/atuin one-liner evals stay cached). Verified against smartcache's plugin source |
+| 10 | nvm installer appended to `~/.bashrc` and printed `C:\Users\Narn\AppData\Roaming\npm` global modules during FR-08 | Interop PATH pollution: `appendWindowsPath=false` only applies AFTER FR-18's `wsl --shutdown`, so the Windows PATH was still live — nvm's installer found the Windows `npm` (listing only, nothing installed into Windows) and a Windows `node` could satisfy the "already present" check | PATH scrub at script top drops `/mnt/*` entries for the whole run (interop calls use absolute paths); nvm installer runs with `PROFILE=/dev/null` (documented nvm switch — no rc-file appends); the system-node skip now requires a non-`/mnt/*` node, with an explicit warn when a Windows node leaks through |
 
 ## 5. Design Decision Ledger
 
@@ -76,25 +82,46 @@ Bugs found only by actually running the automation (or analyzing its output):
 | Firefox = own NSS store (Windows import doesn't apply) | CA trusted in Windows covers Chrome/Edge only; Firefox needs manual rootCA import or the ImportEnterpriseRoots policy — documented in readme Verification/Troubleshooting |
 | nvm pinned `v0.40.3`, `nvm install --lts` | Replaces NodeSource; Node tracks current LTS without touching the script |
 | mkcert = project-wide local TLS authority (not Portainer-scoped) | DDEV itself generates SSL certs via mkcert (docs.ddev.com "Configuring Browsers") — DDEV is the primary consumer; Portainer consumes one generated cert (FR-16). Reusable pattern for future local services documented in readme. libnss3-tools = NSS store Linux-side only (Firefox/Chromium), NOT a WSL2→Windows bridge (mkcert repo: Firefox support "macOS and Linux only") |
-| zsh-completions default (pinned `0.34.0`) | fpath-before-compinit integration has near-zero startup cost; the documented cost applies to the oh-my-zsh mechanism (not used) |
-| `AUTO_CD`, no framework, syntax-highlighting last | User preference + plugin docs |
+| zsh stack v2: antidote-managed, two bundle files | Load order is contractual (fzf-tab README: post-compinit, pre-widget-plugins; verified antidote never runs compinit itself and `antidote load` takes one bundle file) — fpath group (zsh-completions) loads before compinit, main group (smartcache → fzf-tab → autosuggestions) after. Replaces the v1 direct-clone stack; old `~/.zsh/plugins/*` clones removed on migration |
+| antidote = plugins, smartcache = evals | antidote's static load file already caches plugin loading — smartcache is only for `eval "$(tool init zsh)"` hooks (zoxide, atuin, patina), where it auto-refreshes stale cache |
+| zsh-patina replaces zsh-syntax-highlighting | User-selected stack; patina is fastest on all five zsh-bench metrics (command_lag 0.197 ms vs 0.528; input_lag 1.394 ms vs 8.385 — author's benchmark). Trade-off noted: young project (570★ vs ~35k★) — maturity risk, not speed risk; activated last via smartcache |
+| atuin + native prefix-search combo | atuin on Ctrl-R only (`--disable-up-arrow`); Up/Down keep zsh's `up/down-line-or-beginning-search` — prefix search stays native, full-history fuzzy search goes to atuin (Rust + SQLite, minimal per-command overhead; no documented setopt conflicts with SHARE_HISTORY) |
+| zsh-completions default (pinned `0.36.0`) | fpath-before-compinit via the antidote fpath bundle file; near-zero startup cost. Tag naming verified per repo: zsh-completions tags are NOT v-prefixed, autosuggestions ARE (`v0.7.1`) — the v1 pin `0.7.1` silently fell back to latest (latent bug, fixed by resolving tags via git ls-remote) |
+| `AUTO_CD`, no framework, rationalise-dot widget | User preference; rationalise-dot (bindkey `.`) replaces manydots-magic as an inline widget — same `...` ancestor navigation without the external plugin's zle-wrap ordering quirks |
+| zsh stack binaries via pinned .deb/tarball | patina `1.12.0` and zoxide `0.10.0` ship .debs → dpkg-managed, skip-if-installed via the same `dpkg -s` pattern as apt packages; atuin `v18.24.8` via release tarball downloaded to file (never `curl \| sh`, extending the download-to-file rule); zoxide is not in bookworm repos; fzf comes from apt (0.38.0) |
 | swap=1GB (owner-adjusted from doc-exact 4GB) | Storage-saving adjustment, declared in PRD |
 | TTY-gated colors (`-t 1`) | Piped/captured output (tests, logs) stays plain so assertions never break |
 | Skip-if-installed everywhere | Rerun-safe; partial failures resume without reinstalling |
 | Scheduled future-dated commits | Contribution-graph queue (18/19/20 Nov) — established user workflow |
 | Flag surface trimmed to 4 | YAGNI: `--shell`/`--no-portainer` removed (never used); kept `--no-upgrade`/`--skip-ca-import`/`--log`/`--pause` |
 | Manual handoff over auto-chain (containment) | Windows phase ends with a printed guide; the provisioning script is copied into the Linux filesystem and run from there — no cross-boundary execution (Nov 20 decision) |
-| Flag surface trimmed to 4 | YAGNI: `--shell`/`--no-portainer` removed (never used); kept `--no-upgrade`/`--skip-ca-import`/`--log`/`--pause` |
 | Persistent cert dir `$HOME/.local/share/portainer-tls` | `/tmp` bind-mounts broke after VM boot (Debian tmpfiles wipes `/tmp` → dockerd auto-created dirs → "not a directory"); certs now survive restarts |
+| Portainer TLS via native `--sslcert/--sslkey` flags, not a reverse proxy | Found pre-run by code trace: the cert pair was bind-mounted at `/data/tls/` but Portainer never reads that path (`api/internal/ssl/ssl.go`: `certSupplied` requires both CLI flags) — it served its own self-signed cert on 9443, silently wasting the FR-15 Windows CA import. Flags are the documented method (docs.portainer.io/advanced/ssl); with flags supplied on boot Portainer copies the pair over the datastore's self-signed one, so the heal-recreate keeps `portainer_data`. DDEV's `ddev-router` already provides the multi-project TLS proxy layer, so a standalone reverse proxy is deferred until non-DDEV containers actually need HTTPS (scaling table in readme) |
 
 ## 6. Validation Status
 
-- Offline sandbox suite (`run-sim-tests.sh`, 5 scenarios): **23/23 PASS** —
-  fresh, rerun/idempotency, escape-hatches (`--no-upgrade --skip-ca-import`),
-  non-Debian abort, systemd restart gate.
-- PowerShell component tests: **17/17 PASS** (UTF-16 cleaning, path mapping,
-  single-distro, Debian-only validation, FR-04 thresholds, WSLENV append,
-  `.wslconfig` keys).
+- Offline sandbox suite (`run-sim-tests.sh`, 5 scenarios): **35/35 PASS** —
+  fresh, rerun/idempotency (no portainer recreate, no zsh-stack re-downloads),
+  escape-hatches (`--no-upgrade --skip-ca-import`), non-Debian abort, systemd
+  restart gate; zsh stack v2 asserts (patina/atuin/zoxide pinned installs,
+  antidote loads in `.zshrc`, no v1 source lines). Plus one-off heal checks:
+  a portainer container seeded with the cert mount but no flags is recreated
+  with them, and a v1-managed `.zshrc` (old block + clones) is migrated to
+  the v2 block with a backup.
+- PowerShell component tests: PASS count tracked dynamically by the sim suite
+  (UTF-16 cleaning, path mapping, single-distro, Debian-only validation,
+  FR-04 thresholds, `.wslconfig` keys incl. hostAddressLoopback; the WSLENV
+  assertions were removed with the dead forwarding mechanism).
+- **Verify-and-fix loop** (protocol in `docs/verification-loop.md`; suite lives
+  in `%TEMP%\wsl-tests` — repo copy removed by decision, Nov 20): run
+  `bash verify-all.sh` from the suite dir → fix one failing SIGNATURE → rerun;
+  stop when all green, when the same SIGNATURE appears 3 consecutive iterations
+  (report it to the user verbatim), or after 6 iterations. Never commits —
+  green states stay uncommitted for human review. **First full run: PASS 7/7
+  in 4 fix iterations** (battery self-bugs: pin extraction caught
+  expansion-valued assignments under `set -u`, TODO scan self-matched mktemp
+  templates; sim-stub `install` case created numeric-named dirs; doc-lint
+  pattern mismatch). Second consecutive run: PASS, no edits — idempotent.
 - Limitation: the interactive pwsh gate and the real installer are **not
   covered by the sandbox** — only the next real run can close that gap.
 
@@ -103,9 +130,11 @@ Bugs found only by actually running the automation (or analyzing its output):
 - **Debian** distro installed (Branch 3, Nov 16); first launch **not**
   completed → default user still root → on rerun, Branch 1 prints the
   first-launch instructions.
-- **`nann`** user created (home, sudo group) with a password that was never
-  successfully set — the default-user gate's reset/creation flow resolves
-  this on the next run.
+- **`nann`** user created (home, sudo group) whose password was never
+  successfully set — the native first-launch flow resolves this: launching
+  `wsl -d Debian` as an uncompleted distro either resumes first-launch user
+  creation or drops to root; either way complete the native setup before
+  provisioning (the printed handoff guide covers both cases).
 - **Ubuntu** was installed by the Branch 2 bug (#1 in §4) — unregister it if
   still present: `wsl --unregister Ubuntu`.
 - `.wslconfig` written with swap=1GB (owner-adjusted); feature states enabled.
@@ -113,27 +142,37 @@ Bugs found only by actually running the automation (or analyzing its output):
 ## 8. Pending / Next Steps
 
 1. **Real end-to-end run**: `wsl --unregister Ubuntu` (if present) →
-   `wsl-setup.ps1` (Admin) → complete the native first launch when instructed
-   → provisioning chains automatically → check `RESULT: PASS`.
-2. Run `tests/verify-install.sh` inside Debian + `tests/verify-install.ps1`
-   on Windows for the acceptance-criteria sweep.
-3. **Ephemeral artifact warning**: the offline test suite lives in
-   `%TEMP%\wsl-tests` (moved out of the repo by design) — Temp is wiped by
-   Windows periodically. Re-create it from this document's §6 description or
-   re-add `tests/` to the repo if it will be maintained.
-4. Open (non-blocking): none — all raised requests are implemented.
+   `wsl-setup.ps1` (Admin) → complete the native first launch when the printed
+   guide says so → run the printed provisioner commands inside Debian →
+   check `RESULT: PASS`.
+2. Run `verify-install.sh` inside Debian + `verify-install.ps1` on Windows
+   for the acceptance-criteria sweep (suite lives in `%TEMP%\wsl-tests` —
+   see §8.3).
+3. Open (non-blocking): none — all raised requests are implemented.
+
+## 8.3 Test suite location (updated Nov 20, twice)
+
+The verify-and-fix loop was briefly committed in-repo (`tests/`) and then
+removed by decision the same day: the repo keeps documentation only
+(`docs/`), the suite stays ephemeral in `%TEMP%\wsl-tests` (battery:
+syntax, sandbox sim, pinned-URL HEAD checks, pin consistency, v1 remnants,
+doc lint, hygiene), and the loop protocol is preserved as
+`docs/verification-loop.md`. If `%TEMP%` is wiped, re-create the suite from
+this document's §6 description and `docs/verification-loop.md`.
 
 ## 9. File Map
 
 | File | Role |
 |------|------|
-| `wsl-setup.ps1` | Windows preparer: preflight, decision tree, `.wslconfig`, first-launch guidance, chain |
+| `wsl-setup.ps1` | Windows preparer: preflight, decision tree, `.wslconfig`, manual handoff guide |
 | `provision-wsl.sh` | Debian provisioner: 13 tasks, flag surface, PASS/FAIL report |
-| `wsl-ddev-setup-prd.md` | Requirements contract (FR-01..FR-18, policies, risks) |
-| `readme.md` | User-facing install guide + Sources table |
-| `wslddev.md` | Original manual procedure (source of truth for the flow) |
-| `git-scheduled-commits.md` | Scheduled/backdated commit technique doc |
-| `%TEMP%\wsl-tests\` | Offline test suite (ephemeral — see §8.3) |
+| `readme.md` | User-facing install guide + Sources table (root) |
+| `docs/wsl-ddev-setup-prd.md` | Requirements contract (FR-01..FR-18, policies, risks) |
+| `docs/MILESTONE.md` | This file — context ledger (moved to docs/, Nov 20) |
+| `docs/wslddev.md` | Original manual procedure (source of truth for the flow) |
+| `docs/git-scheduled-commits.md` | Scheduled/backdated commit technique doc |
+| `docs/verification-loop.md` | Verify-and-fix loop protocol (suite in `%TEMP%\wsl-tests`) |
+| `docs/b4code.md`, `docs/erlog.txt` | Methodology notes, real-run error log |
 
 ## 10. Scheduled Commit Queue
 
