@@ -114,12 +114,15 @@ active, and a list of all existing containers.
   comment). Script-managed `.zshrc` changes are appended as a marker-delimited
   block and never clobber user content.
 - Shell setup policy, declared deliberately: no framework (Oh My Zsh is rejected
-  for its startup cost). Plugins are git-cloned `--depth=1` at pinned upstream
-  release tags (supply-chain control; fallback to latest if the tag is missing)
-  and sourced directly; `zsh-syntax-highlighting` is sourced last, as its
-  documentation requires. `zsh-completions` is included by default via
-  fpath-before-compinit (near-zero startup cost; the project's documented
-  cost applies to the oh-my-zsh plugin mechanism, which we do not use).
+  for its startup cost). Plugins are managed by antidote (pinned release clone),
+  with pins enforced per bundle via `branch:<tag>` or `pin:<full commit SHA>`
+  annotations (supply-chain control — no floating latest; the v1 direct-clone
+  fallback-to-latest behavior is retired). `zsh-smartcache` caches tool `eval`
+  hooks (zoxide, atuin, patina); antidote handles plugins — the two do not
+  overlap. `zsh-patina` replaces `zsh-syntax-highlighting` and is activated
+  last via smartcache. `zsh-completions` is included by default via
+  fpath-before-compinit; `fzf-tab` loads after compinit and before
+  widget-wrapping plugins, per its README's load-order requirement.
 - The Linux script is unattended after one sudo prompt (sudo timestamp kept
   alive); the Windows script is interactive only where the OS requires it
   (elevation, native first-launch user creation).
@@ -190,9 +193,10 @@ runs `wsl --shutdown` so it applies on next start.
 
 ### FR-04 - Capability Warning
 If the Windows build or WSL version does not support Mirrored networking or
-systemd, warns loudly and records a FAIL for the final report (forwarded via
-WSLENV, appended - never overwriting an existing WSLENV); still writes the
-documented config.
+systemd, warns loudly during preflight AND repeats the warning in Branch 1's
+printed handoff guide (after the containment decision an env var cannot reach
+the separately-launched Debian shell, so the earlier WSLENV forwarding was
+removed as a dead path); still writes the documented config.
 
 ## 6. Requirements — Linux (provision-wsl.sh)
 
@@ -216,25 +220,40 @@ rerun).
 
 ### FR-08 - Development Tools
 Installs only items missing from the tool list defined at the top of the script.
-Default list: curl, git, zsh, unzip (required by bun's installer), xz-utils
-(required by nvm's node tarballs), build-essential, Node.js LTS with npm via
-nvm (installer downloaded to file; `nvm install --lts`), bun (via its official
-installer). Prints versions after installation.
+Default list: curl, git, zsh, fzf (backend for fzf-tab in FR-09), unzip
+(required by bun's installer), xz-utils (required by nvm's node tarballs),
+build-essential, Node.js LTS with npm via nvm (installer downloaded to file;
+`nvm install --lts`), bun (via its official installer). Prints versions after
+installation.
 
 ### FR-09 - Shell Setup (zsh)
-Clones `zsh-users/zsh-autosuggestions` and `zsh-users/zsh-syntax-highlighting`
-(`git clone --depth=1` at pinned upstream release tags) into `~/.zsh/plugins/`
-(skip if present), and appends a marker-delimited block to `~/.zshrc` that
-sources them directly — `zsh-syntax-highlighting` sourced last per its
-documentation, with a cached `compinit` (its skipped security audit is a
-documented tradeoff) — plus nvm sourcing so zsh sessions get the Node
-installed in FR-08. Sets zsh as the default shell (`sudo chsh`). Clones
-`zsh-users/zsh-completions` by default (pinned `0.34.0`), adding its `src`
-directory to `fpath` before compinit, and enables AUTO_CD. Skips everything
-if the marker
-block already exists. Prints measured interactive startup time
-(`time zsh -i -c exit`); soft target: under 150 ms. The change applies to
-newly opened sessions.
+antidote-managed plugin stack (no framework). Clones antidote itself at a
+pinned release tag into `~/.antidote` (skip if present). Installs the stack
+binaries, all pinned, all skip-if-installed: zsh-patina and zoxide via their
+pinned GitHub `.deb` releases (`dpkg -i`, arch from `dpkg --print-architecture`;
+zoxide is not in bookworm repos), atuin via its pinned release tarball
+downloaded to file and extracted to `~/.atuin/bin` — never piped into a shell.
+Writes two antidote bundle files (rewritten only when content differs):
+`~/.zsh_plugins_fpath.txt` (`zsh-users/zsh-completions` pinned, `path:src
+kind:fpath` — loaded BEFORE compinit) and `~/.zsh_plugins.txt`
+(`zsh-smartcache` pinned by full SHA — no upstream tags, then `fzf-tab` and
+`zsh-autosuggestions`, both pinned — loaded AFTER compinit per fzf-tab's
+documented order requirement, before widget-wrapping plugins; smartcache
+first so later `smartcache eval` calls resolve). Replaces the managed
+`~/.zshrc` block wholesale when its content changes: the marker-delimited
+block is swapped out (content outside the markers preserved, file backed
+up) — this migrates v1 installs off the old clone-and-source stack, and the
+stale `~/.zsh/plugins/*` clones are removed. The managed block wires: PATH
+(`~/.local/bin`, `~/.atuin/bin`, `~/.bun/bin`), history settings
+(HISTSIZE/SAVEHIST 50000, dedupe + share), nvm sourcing, the two antidote
+loads around a cached `compinit -C` (its skipped security audit is a
+documented tradeoff), fzf-tab zstyles, AUTO_CD + the rationalise-dot widget,
+zoxide via smartcache, native up/down prefix search widgets with atuin
+`--disable-up-arrow` (Ctrl-R only), and `zsh-patina activate` via smartcache
+last. Pre-warms antidote non-interactively before the timing measurement.
+Sets zsh as the default shell (`sudo chsh`). Prints measured interactive
+startup time (`time zsh -i -c exit`); soft target: under 150 ms. The change
+applies to newly opened sessions.
 
 ### FR-10 - Cleanup Conflicting Packages
 Removes conflicting packages per the official Docker docs (docker.io,
@@ -264,20 +283,25 @@ and the pinned mkcert binary (version pinned in the script; architecture from
 
 ### FR-15 - Import CA to Windows (default on; skip with `--skip-ca-import`)
 Exports the mkcert root CA and imports it into the Windows current-user
-Trusted Root store via certutil.exe through WSL interop, and into the Firefox
-NSS store. Skips if already trusted; exits the step cleanly when the Windows
+Trusted Root store via certutil.exe through WSL interop. Skips if already
+trusted; exits the step cleanly when the Windows
 username cannot be resolved; removes the staged CA copy from Windows Temp on
-success.
+success. (Linux-side NSS is trusted by `mkcert -install` in FR-14; the
+Windows Firefox NSS store is not touched here — manual import is documented
+in the readme.)
 
 ### FR-16 - Portainer
 If the container exists: starts it if stopped, otherwise reports running, and
-recreates it automatically when it lacks the mkcert TLS cert or is bound to
-`0.0.0.0` (LAN-exposed).
+recreates it automatically when it lacks the mkcert TLS cert, lacks the
+`--sslcert/--sslkey` flags, or is bound to `0.0.0.0` (LAN-exposed).
 Otherwise: creates the volume and container per wslddev.md, bound to loopback
 only (`127.0.0.1:9443`) so it is not reachable from the local network, and
-serves a mkcert-signed cert for `localhost 127.0.0.1` (generated in this
-stage — scoped to Portainer's listener; mkcert itself is the project-wide
-TLS authority used by DDEV, see the readme) so the Windows browser shows no
+serves a mkcert-signed cert for `localhost 127.0.0.1` — the pair is
+bind-mounted to `/data/tls/` and passed to Portainer via `--sslcert/--sslkey`
+on `docker run` (Portainer loads the pair only through these flags; a bare
+mount is ignored and it keeps serving its own self-signed cert). The cert is
+scoped to Portainer's listener; mkcert itself is the project-wide TLS
+authority used by DDEV (see the readme), so the Windows browser shows no
 warning. `http://127.0.0.1:9000` remains available as an unencrypted
 fallback. Certs live in a persistent dir (`~/.local/share/portainer-tls`) —
 never `/tmp`, which Debian tmpfiles wipes on every VM boot.
@@ -295,8 +319,6 @@ all containers. Each status item is marked PASS/FAIL; the script exits
 non-zero if any item fails.
 After the report, the script restarts WSL (`wsl.exe --shutdown` via interop)
 so all applied configuration takes effect — the terminal closes by design.
-After the report, the script restarts WSL (`wsl.exe --shutdown` via interop)
-so all applied configuration takes effect — the terminal closes by design.
 
 ## 7. Acceptance Criteria
 
@@ -308,24 +330,29 @@ so all applied configuration takes effect — the terminal closes by design.
 - With more than one distro registered, Branch 1 aborts with the full list and
   `wsl --unregister` instructions (single-distro rule). With a non-Debian distro
   installed, Branch 1 aborts with a Debian-only message.
-- From Branch 1: `.wslconfig` exists with exactly the documented values, and
-  `wslinfo --networking-mode` reports `mirrored` (on WSL versions supporting
-  it); byte-equality with the template is the fallback check.
+- From Branch 1: `.wslconfig` exists with exactly the documented values
+  (manual check — Branch 1 prints the written file; `wslinfo --networking-mode`
+  reporting `mirrored` is the optional deeper verification on WSL versions
+  that support it).
 - The Linux run prints the inventory first; already-installed components are
   reported with versions and skipped, not reinstalled.
 - Provisioning uses apt with the deb822 source keyed by the detected codename;
   a non-Debian distro aborts at FR-05 with a clear message.
 - Remote installers (DDEV, bun, nvm) are downloaded to a file before
-  execution; the mkcert binary and zsh plugin tags are pinned.
-- After provisioning: curl, git, node, npm, bun, zsh, docker, ddev, mkcert all
-  report versions; hello-world ran without sudo; Portainer is running and
-  reachable only on loopback; the mkcert root CA is trusted in the Windows
-  current-user store and Firefox NSS.
-- A newly opened WSL session starts in zsh with autosuggestions working and
-  syntax highlighting active; the managed `.zshrc` block is the only change to
-  the file; measured startup time is printed and under the 150 ms soft target.
-- `zsh-completions` is installed by default (pinned tag `0.34.0`), with its
-  `src` directory on `fpath` before compinit.
+  execution; the mkcert binary, the zsh stack binaries (patina/atuin/zoxide),
+  and the antidote bundle pins are pinned.
+- After provisioning: curl, git, node, npm, bun, zsh, fzf, docker, ddev,
+  mkcert all report versions; hello-world ran without sudo; Portainer is
+  running and reachable only on loopback; the mkcert root CA is trusted in
+  the Windows current-user store (Firefox: manual import, documented).
+- A newly opened WSL session starts in zsh with autosuggestions, fzf-tab
+  completion, prefix history search, atuin Ctrl-R search, and patina
+  highlighting active; the managed `.zshrc` block is the only automation-owned
+  part of the file; measured startup time is printed and under the 150 ms
+  soft target.
+- `zsh-completions` is installed by default (pinned tag `0.36.0`), with its
+  `src` directory on `fpath` before compinit, loaded via the antidote fpath
+  bundle file.
 - The final block lists all containers via `docker ps -a`, each status item
   PASS/FAIL, and the script exits non-zero on any FAIL.
 - Running either script again produces no errors and no duplicated state
@@ -347,5 +374,5 @@ so all applied configuration takes effect — the terminal closes by design.
 | Network/GPG failure mid-install | Medium | Fail fast; idempotent rerun |
 | Running as root | Medium | EUID guard aborts before any install (installs must land in the real user's home) |
 | User not in docker group | High | usermod during install; `sg docker` for in-session verification |
-| Shell startup slowdown from plugins/frameworks | Medium | No-framework policy; pinned plugin tags; syntax-highlighting sourced last; startup time measured against soft target |
+| Shell startup slowdown from plugins/frameworks | Medium | No-framework policy; pinned plugin/binary versions; fpath-before-compinit + post-compinit antidote split; patina activated last; startup time measured against soft target |
 | Long runtime from pauses/logging | Low | `--pause` configurable |

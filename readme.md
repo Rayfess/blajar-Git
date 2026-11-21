@@ -46,9 +46,9 @@ In this project were introducing the basic and to advanced guide to use github a
 This repository ships a one-command installer for a full Linux development
 environment on WSL2 (Debian-only) with Docker CE, DDEV, Portainer, mkcert HTTPS
 for `*.ddev.site`, and a zsh shell — replacing the manual procedure in
-[wslddev.md](wslddev.md). Requirements and acceptance criteria live in
-[wsl-ddev-setup-prd.md](wsl-ddev-setup-prd.md); project history, decisions,
-and the real-run bug ledger in [MILESTONE.md](MILESTONE.md).
+[docs/wslddev.md](docs/wslddev.md). Requirements and acceptance criteria live in
+[docs/wsl-ddev-setup-prd.md](docs/wsl-ddev-setup-prd.md); project history, decisions,
+and the real-run bug ledger in [docs/MILESTONE.md](docs/MILESTONE.md).
 
 ### Quick Start
 
@@ -89,9 +89,10 @@ and the real-run bug ledger in [MILESTONE.md](MILESTONE.md).
 [Debian terminal]  (user follows the printed guide)
   1. first launch (native user setup)            ← only if path C said so
   2. cp /mnt/d/.../provision-wsl.sh ~/
-  3. bash ~/provision-wsl.sh --upgrade           ← flags carried over
-       └─ 13 tasks: inventory → wsl.conf → apt → tools → zsh → Docker
-          → DDEV → mkcert → CA → Portainer → PASS/FAIL report
+  3. bash ~/provision-wsl.sh                     ← flags carried over
+       └─ 13 tasks: inventory → wsl.conf → apt upgrade → tools → zsh stack
+          → cleanup → Docker → DDEV → mkcert → CA import → Portainer
+          → PASS/FAIL status report
   4. one sudo password prompt, then unattended
 ```
 
@@ -132,8 +133,10 @@ signal. Deeper, read-only checks — run inside Debian:
 ```bash
 ddev -v                          # DDEV version
 docker ps                        # daemon reachable, containers listed
-ls ~/.zsh/plugins                # autosuggestions, completions, syntax-highlighting
-grep -c zcode-managed ~/.zshrc   # managed block present (1 = ok)
+ls ~/.antidote                   # antidote plugin manager (pinned clone)
+cat ~/.zsh_plugins.txt           # main bundle pins (smartcache/fzf-tab/autosuggestions)
+zsh-patina --version && atuin --version && zoxide --version && fzf --version
+grep -c zcode-managed ~/.zshrc   # managed block present (2 = ok)
 ```
 
 … and from Windows (Portainer reachable — no TLS warning: the cert on 9443 is
@@ -142,14 +145,6 @@ mkcert-signed and the CA is trusted on Windows; config in place):
 ```powershell
 Get-Content $env:UserProfile\.wslconfig
 curl.exe -fsS https://127.0.0.1:9443      # no -k needed - cert is trusted
-```
-
-Default distro sanity (after unregister/reinstall cycles):
-
-```powershell
-wsl -l -v                     # exact registered names + states
-wsl --shutdown                # reset WSL state
-wsl --set-default Debian      # fix stale default (verified community order)
 ```
 
 CA trust (mkcert ↔ Windows browser) — the mkcert-signed cert only helps if
@@ -195,26 +190,26 @@ warns). **Firefox uses its own NSS store** — see the next section.
 | Symptom | Fix |
 |---------|-----|
 | `[ABORT] Running as root is not supported` | First launch not completed — follow the printed first-launch steps, then rerun the installer |
-| `[FAIL] password verification failed - sudo did not accept it` | Rerun the installer — it offers an in-place password reset for the existing user |
+| `[FAIL] password verification failed - sudo did not accept it` | The password is the one created during Debian's native first launch - complete that flow first (launch `wsl -d Debian`, create the user), then rerun the installer |
 | `permission denied ... docker.sock` at FR-12 | Fixed in the current script — pull the latest `provision-wsl.sh` and rerun |
 | Portainer `not a directory` mount error after a WSL restart | Fixed in the current script (certs moved out of `/tmp` to a persistent dir) — rerun the installer; it auto-recreates the container with the certs |
 | `WININET_E_CONNECTION_RESET` when downloading the Debian distro | Transient CDN reset — the installer retries, then falls back to `--web-download` (bypasses the Store CDN); also check VPN/proxy. Rerun the installer |
-| Browser warning on `https://127.0.0.1:9443` | Diagnose first: `openssl s_client -connect 127.0.0.1:9443 ... -noout -issuer` (see Verification) — issuer = Portainer self-signed → rerun the installer (auto-recreates with the mkcert cert); issuer = your mkcert CA → restart Chrome/Edge (store refresh) |
+| Browser warning on `https://127.0.0.1:9443` | Diagnose first: `openssl s_client -connect 127.0.0.1:9443 ... -noout -issuer` (see Verification) — issuer = Portainer self-signed → rerun the installer (auto-detects the missing `--sslcert/--sslkey` flags, recreates the container with the mkcert cert); issuer = your mkcert CA → restart Chrome/Edge (store refresh) |
 | CA missing from Windows store (`certutil -user -store Root` shows no mkcert) | Rerun the installer — FR-15 imports it (idempotent) |
+| `Failed to connect to system scope bus` / `Reload daemon failed` during apt | Harmless Debian package postinst noise in WSL (a setup script could not reach dbus) — the package configures fine; ignore |
+| nvm installer appends to `~/.bashrc` / lists `C:\Users\...\Roaming\npm` globals | Fixed in the current script — Windows PATH entries are scrubbed during provisioning and the installer runs with `PROFILE=/dev/null`; rerun |
 | `WSL_E_DISTRO_NOT_FOUND` in the installer or the Windows Terminal Debian profile | Stale default distro / stale WT profile after unregister+reinstall — verified fix order: `wsl --shutdown` → `wsl --set-default Debian` → `wsl -l -v` → restart Windows Terminal (profiles regenerate). The fixed installer also auto-heals a stale default. Note: `wsl --unregister <name>` deletes that distro's filesystem |
 | Firefox still warns | Firefox uses its own NSS store — the Windows import doesn't apply; use Chrome/Edge or import rootCA.pem into Firefox |
-| Portainer missing | Installed unless `-NoPortainer`; start manually: `docker start portainer` |
+| Portainer missing | Installed by default (no flag to skip it since the flag-surface trim); start manually: `docker start portainer` |
 | A task FAILs mid-run | Rerun the installer (idempotent — completed stages are skipped) and paste the output |
 | Terminal closes at the end of provisioning | By design — the script restarts WSL to apply configuration; reopen with `wsl -d Debian` |
 
-Full real-run bug ledger: [MILESTONE.md](MILESTONE.md) §4.
+Full real-run bug ledger: [docs/MILESTONE.md](docs/MILESTONE.md) §4.
 
 ### mkcert — project-wide local TLS authority
 
 Flow reference: Randy Fay's [DDEV on WSL2 From Scratch](https://www.youtube.com/watch?v=g8cONkiLOdM)
 (the video this project's research started from).
-
-### mkcert — project-wide local TLS authority
 
 [Upstream README](https://github.com/FiloSottile/mkcert) (59.9k stars) defines
 mkcert as *"a simple zero-config tool to make locally trusted development
@@ -226,9 +221,23 @@ is the project-wide local TLS authority:
   ([docs.ddev.com — Configuring Browsers](https://docs.ddev.com/en/stable/users/install/configuring-browsers)).
   Installed and registered in FR-14, CA trusted on Windows in FR-15.
 - **Portainer** — one consumer of a generated certificate (FR-16): the
-  self-signed warning on `https://127.0.0.1:9443` is fixed by mounting a
-  mkcert-signed cert for `localhost 127.0.0.1`.
+  self-signed warning on `https://127.0.0.1:9443` is fixed by mounting the
+  mkcert-signed cert for `localhost 127.0.0.1` **and** passing it to
+  Portainer via `--sslcert/--sslkey` on `docker run` — Portainer ignores a
+  bare `/data/tls` mount and serves its own self-signed cert without the flags.
 - **Any future local service** — follow the same pattern.
+
+#### Where TLS termination lives as the setup grows
+
+| What you add | Who terminates TLS | Action needed |
+|---|---|---|
+| New DDEV projects | `ddev-router` (DDEV's built-in proxy) + mkcert | Nothing — `https://<project>.ddev.site` is trusted automatically |
+| Portainer UI | Portainer itself, via `--sslcert/--sslkey` | Handled by FR-16 |
+| Random non-DDEV containers (grafana, n8n, …) on HTTPS | **Add a shared reverse proxy** (caddy/traefik) | Only when this case appears — don't pre-build it |
+
+A reverse proxy is the right pattern when fronting many services or when an
+app has no native TLS support — not for a single admin UI that already
+supports certificates natively.
 
 #### Reusable pattern — trusted TLS for any local service
 
@@ -242,6 +251,9 @@ chmod 600 <service>.key
 
 # 2. Configure the service to use the cert + key
 #    (each service has its own mechanism — see its documentation)
+#    Portainer: --sslcert /data/tls/<service>.crt --sslkey /data/tls/<service>.key
+#    on docker run. A bare volume mount is NOT enough — Portainer never reads
+#    the mounted paths unless the flags point it at them.
 
 # 3. Restart the service so it reads the cert
 
@@ -282,9 +294,8 @@ documentation.
 |------|------|
 | `wsl-setup.ps1` | Windows phase: preflight, features, Debian install, `.wslconfig`, handoff guide |
 | `provision-wsl.sh` | Debian phase: 13 provisioning tasks + PASS/FAIL report |
-| `wsl-ddev-setup-prd.md` | Requirements contract — FR-01..FR-18, policies, risks |
-| `MILESTONE.md` | Context ledger — timeline, real-run bug fixes, design decisions |
-| `wslddev.md` | The original manual procedure (source of the flow) |
+| `docs/` | All project documentation: `MILESTONE.md` (context ledger), `wsl-ddev-setup-prd.md` (FR-01..FR-18 contract), `wslddev.md` (original manual procedure), `verification-loop.md` (verify-and-fix loop protocol), plus learning notes and the real-run error log |
+| `%TEMP%\wsl-tests\` | Offline verification suite (ephemeral — battery + sandbox sim; the loop protocol is documented in `docs/verification-loop.md`) |
 
 ### Uninstall
 
@@ -308,11 +319,30 @@ Nothing was installed on the Windows side beyond WSL itself.
 | bun | bun.sh/docs/installation | `bun.sh/install` (download-to-file; needs unzip) |
 | mkcert | github.com/FiloSottile/mkcert | binary release pinned (`v1.4.4`) + libnss3-tools |
 | Portainer CE | docs.portainer.io | image `portainer-ce:latest`, loopback `127.0.0.1:9443` |
-| zsh plugins | github.com/zsh-users | autosuggestions `0.7.1` + syntax-highlighting `0.8.0` (pinned tags) |
+| zsh plugin manager | github.com/mattmc3/antidote | pinned clone (`v2.3.0`); bundles pinned via `branch:`/`pin:` annotations |
+| zsh plugins | github.com/zsh-users + others | completions `0.36.0` (fpath before compinit), autosuggestions `v0.7.1`, smartcache (pinned SHA), fzf-tab `v1.3.0` |
+| zsh stack binaries | github.com/michel-kraemer/zsh-patina · atuinsh/atuin · ajeetdsouza/zoxide | patina `1.12.0` (.deb), atuin `v18.24.8` (tarball→`~/.atuin/bin`), zoxide `0.10.0` (.deb); fzf via apt (bookworm) |
 
 Version policy: DDEV, Docker CE, and Portainer track latest stable; mkcert,
-nvm, and the zsh plugin tags are pinned (supply-chain control); Node.js
-follows the current LTS via nvm.
+nvm, the zsh plugin pins, and the zsh stack binaries are pinned
+(supply-chain control); Node.js follows the current LTS via nvm.
+
+### zsh stack — what loads, in what order
+
+No framework. `~/.zshrc` carries one automation-managed block (content outside
+the `zcode-managed` markers is never touched). Load order inside it:
+
+1. PATH (`~/.local/bin`, `~/.atuin/bin`, `~/.bun/bin`) + history settings + nvm
+2. `antidote load ~/.zsh_plugins_fpath.txt` — zsh-completions registers fpath **before** compinit
+3. `compinit -C` (cached; skipped security audit is a documented tradeoff)
+4. `antidote load` — smartcache → fzf-tab → autosuggestions (fzf-tab requires post-compinit, per its README)
+5. Navigation: AUTO_CD + rationalise-dot widget, zoxide via smartcache
+6. History: native up/down prefix search + atuin on Ctrl-R only (`--disable-up-arrow`)
+7. `zsh-patina activate` via smartcache — highlighting, activated last
+
+Migrating from an older install: rerun the installer — it swaps the managed
+block (backing up `~/.zshrc` first), deletes the v1 `~/.zsh/plugins/*` clones,
+and pre-warms antidote so the printed startup time is steady-state.
 
 ## Appendix
 
