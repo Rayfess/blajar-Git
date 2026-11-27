@@ -1,14 +1,8 @@
 <#
-wsl-setup.ps1 - Windows side of the WSL2 + DDEV setup automation.
-Implements FR-01..FR-04 of docs/wsl-ddev-setup-prd.md.
-Supported distro (PRD): Debian >= 12 ONLY; exactly ONE WSL
-distro may be installed (single-distro rule, FR-02 Branch 1).
-
 Run elevated:
     powershell -ExecutionPolicy Bypass -File wsl-setup.ps1
 
-Optional switches (passed to the printed provisioner command in Branch 1's
-handoff guide - the Linux phase never executes across the boundary):
+Optional switches:
     -NoUpgrade            -> --no-upgrade            (skip the default base upgrade, FR-07)
     -SkipCaImport         -> --skip-ca-import        (FR-15)
     -Log <file>           -> --log <file>            (full transcript, forensics)
@@ -106,7 +100,7 @@ function Install-DebianDistro {
 }
 
 # ---------------------------------------------------------------------------
-# FR-01 - Windows preflight
+# Windows preflight
 # ---------------------------------------------------------------------------
 Write-Stage "FR-01 Windows preflight"
 
@@ -140,7 +134,7 @@ if ($LASTEXITCODE -eq 0) { $distroList = Clean-WslOutput $raw }
 if ($distroList.Count -gt 0) { Write-Info ("Distros: " + ($distroList -join ', ')) }
 else { Write-Info "Distros: none installed" }
 
-# FR-04 - capability warnings (forwarded to the Linux final report via WSLENV)
+# capability warnings (forwarded to the Linux final report via WSLENV)
 $capWarn = $false
 if ($build -lt 22621) {
     Write-WarnLine "Windows build < 22621 (Win11 22H2): networkingMode=Mirrored and nestedVirtualization are NOT supported; documented .wslconfig values will be silently ignored by WSL."
@@ -178,12 +172,11 @@ Write-Info ("WSL feature: {0} | VirtualMachinePlatform: {1}" -f $featWsl, $featV
 $featureEnabled = (($featWsl -eq 'Enabled') -and ($featVmp -eq 'Enabled'))
 
 # ---------------------------------------------------------------------------
-# FR-02 - distro decision tree
+# distro decision tree
 # ---------------------------------------------------------------------------
 if ($distroList.Count -gt 0) {
     # ---- Branch 1: distro installed -> write config + chain provisioning -
     if ($distroList.Count -gt 1) {
-        # Single-distro rule (PRD): exactly one WSL distro may be installed.
         Write-FailLine "Single-distro rule: exactly one WSL distro may be installed. Found:"
         $distroList | ForEach-Object { Write-Host "    - $_" }
         Write-Info "Remove the unwanted ones (this deletes their filesystem):  wsl --unregister <name>"
@@ -191,10 +184,6 @@ if ($distroList.Count -gt 0) {
     }
     $distro = Get-DefaultDistro
     if (-not $distro -or ($distroList -notcontains $distro)) {
-        # Stale default distro (verified real-run bug): the registry
-        # DefaultDistribution GUID can point to an unregistered distro after
-        # unregister/reinstall cycles - 'wsl -d <stale>' then fails with
-        # WSL_E_DISTRO_NOT_FOUND while the real distro works fine. Heal it.
         Write-WarnLine "Default distribution '$distro' is stale/unregistered - healing: wsl --set-default <first registered distro>"
         Invoke-Wsl "--set-default $($distroList[0])"
         if ($LASTEXITCODE -ne 0) {
@@ -211,7 +200,7 @@ if ($distroList.Count -gt 0) {
     Write-Stage ("FR-02 Branch 1: distro '{0}' validated (Debian)" -f $distro)
     Complete-Stage "single-distro rule satisfied"
 
-    # FR-03 - write .wslconfig (values per wsl-ddev-setup-prd.md; swap adjusted
+    # write .wslconfig (values per wsl-ddev-setup-prd.md; swap adjusted
     # from the doc-exact 4GB per the declared PRD deviation; hostAddressLoopback
     # is load-bearing for the Windows-side 127.0.0.1 reachability checks)
     $marker = '# managed by wsl-setup.ps1 (wsl-ddev-setup-prd.md) - values per PRD (swap adjusted from wslddev.md doc-exact 4GB)'
@@ -262,19 +251,10 @@ hostAddressLoopback=true
     if ($NoUpgrade) { $flags += '--no-upgrade' }
     if ($SkipCaImport) { $flags += '--skip-ca-import' }
     if ($Log) { $flags += @('--log', (Convert-To-LinuxPath $Log)) }
-    # always forwarded so the printed command is self-describing (the sh-side
-    # default lives in provision-wsl.sh - not duplicated here)
     $flags += @('--pause', "$Pause")
 
     Write-Host ""
     Write-Info "Windows phase complete. The Linux phase runs inside Debian - containment: nothing executes across the boundary."
-    # Default-user gate: a distro without a completed first launch runs as root.
-    # The native, documented flow applies (learn.microsoft.com/windows/wsl:
-    # "Once you have installed WSL, you will need to create a user account and
-    # password for your newly installed Linux distribution") - the first launch
-    # of the distro opens its own setup and asks for the UNIX username and
-    # password. The automation does NOT create users or touch credentials
-    # non-interactively; it guides the user to the native flow.
     $defaultUser = (Invoke-Wsl "-d $distro -e id -un" | Clean-WslOutput | Select-Object -First 1)
     $needsFirstLaunch = (-not $defaultUser -or $defaultUser -eq 'root')
     Write-Stage "Guide: continue inside Debian (manual handoff - containment)"
